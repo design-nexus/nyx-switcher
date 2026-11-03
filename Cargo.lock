@@ -611,7 +611,7 @@ dependencies = [
 [[package]]
 name = "nyx-desktop"
 version = "0.1.0"
-source = "git+https://github.com/design-nexus/nyx-core.git?rev=a3b8fdf1d592ed9e44531747c70dfb49d65077b8#a3b8fdf1d592ed9e44531747c70dfb49d65077b8"
+source = "git+https://github.com/design-nexus/nyx-core.git?rev=ce9cdf835790b2347a3bc5d65ef2d45f634132d5#ce9cdf835790b2347a3bc5d65ef2d45f634132d5"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -620,6 +620,7 @@ dependencies = [
  "glib",
  "serde",
  "serde_json",
+ "toml",
  "wayland-client",
  "wayland-protocols",
 ]

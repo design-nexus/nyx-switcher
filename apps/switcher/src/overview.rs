@@ -20,6 +20,9 @@ pub struct Overview {
     sw: Weak<Switcher>,
     window: gtk::Window,
     search: gtk::SearchEntry,
+    /// The active workspace profile, and a menu to switch (when there are two or more).
+    profile_label: gtk::Label,
+    profile_menu: gtk::MenuButton,
     body: gtk::FlowBox,
     scroll: gtk::ScrolledWindow,
     /// Only this app's windows (from the dock), until closed.
@@ -51,6 +54,13 @@ impl Overview {
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         head.add_css_class("ov-head");
         head.set_halign(gtk::Align::Center);
+        let profile_label = gtk::Label::new(None);
+        profile_label.add_css_class("ov-profile");
+        let profile_menu = gtk::MenuButton::new();
+        profile_menu.set_icon_name("view-paged-symbolic");
+        profile_menu.add_css_class("ov-icon-button");
+        head.append(&profile_label);
+        head.append(&profile_menu);
         let search = gtk::SearchEntry::new();
         search.add_css_class("ov-search");
         search.set_placeholder_text(Some("Search windows"));
@@ -83,6 +93,8 @@ impl Overview {
             sw: sw.weak_ref(),
             window,
             search,
+            profile_label,
+            profile_menu,
             body,
             scroll,
             app: RefCell::default(),
@@ -148,6 +160,7 @@ impl Overview {
         let width = monitor.as_ref().map(|m| m.geometry().width()).unwrap_or(1280);
         self.columns.set(((width - 96) / TILE).clamp(1, 8) as usize);
         self.window.set_monitor(monitor.as_ref());
+        self.show_profiles();
         self.refresh();
         self.window.present();
         self.search.grab_focus();
@@ -155,6 +168,52 @@ impl Overview {
             self.tiles.borrow().iter().map(|(_, i)| i.stable_id.clone()).filter(|id| !id.is_empty()).take(40).collect();
         sw.capture(ids);
         sw.debug_log("overview open");
+    }
+
+    /// The active workspace profile and the others to switch to (Nyx Settings applies a
+    /// profile). Hidden with fewer than two profiles.
+    fn show_profiles(&self) {
+        let store = nyx_desktop::profiles::Store::user();
+        let list = store.list();
+        let active = store.active();
+        let shown = list.len() >= 2;
+        self.profile_label.set_visible(shown);
+        self.profile_menu.set_visible(shown);
+        if !shown {
+            return;
+        }
+        let name = list.iter().find(|p| active.as_deref() == Some(p.id.as_str())).map(|p| p.name.clone()).unwrap_or_default();
+        self.profile_label.set_text(&name);
+        self.profile_menu.set_tooltip_text(Some(&format!("Workspace profile: {name}")));
+        let menu = gio::Menu::new();
+        for p in &list {
+            let item = gio::MenuItem::new(Some(&p.name), None);
+            item.set_action_and_target_value(Some("ov-profile.switch"), Some(&p.id.to_variant()));
+            menu.append_item(&item);
+        }
+        self.profile_menu.set_menu_model(Some(&menu));
+        let group = gio::SimpleActionGroup::new();
+        let action = gio::SimpleAction::new_stateful(
+            "switch",
+            Some(glib::VariantTy::STRING),
+            &active.clone().unwrap_or_default().to_variant(),
+        );
+        let label = self.profile_label.downgrade();
+        let names: Vec<(String, String)> = list.iter().map(|p| (p.id.clone(), p.name.clone())).collect();
+        action.connect_activate(move |a, v| {
+            let Some(id) = v.and_then(|v| v.get::<String>()) else { return };
+            a.set_state(&id.to_variant());
+            if let (Some(l), Some((_, name))) = (label.upgrade(), names.iter().find(|(i, _)| *i == id)) {
+                l.set_text(name);
+            }
+            // Settings applies it (workspaces, rules, moving windows); the overview
+            // follows the windows as they move.
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("nyx-settings").args(["--workspace-profile", &id]).output();
+            });
+        });
+        group.add_action(&action);
+        self.profile_menu.insert_action_group("ov-profile", Some(&group));
     }
 
     pub fn close(&self) {

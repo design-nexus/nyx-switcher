@@ -256,3 +256,10 @@ window.nyx-overview .sw-tabs {
   font-size: 11px;
   font-weight: 600;
 }
+
+window.nyx-overview .ov-profile {
+  font-size: 13px;
+  font-weight: 600;
+  color: @theme_dim_text;
+  margin-right: -4px;
+}

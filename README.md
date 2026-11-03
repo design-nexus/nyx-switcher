@@ -46,6 +46,9 @@ to it. Each window has buttons, and keys, to act on it without going there:
 
 Tabs of one group sit side by side, each marked with its place in the group.
 
+With two or more workspace profiles (Nyx Settings → Workspace Profiles), the
+overview shows the active one beside the search; its menu switches to another.
+
 Nyx Dock's right-click menu has Show windows, which opens the overview on that app's
 windows (`nyx-switcher-send overview <desktop id>`).
 
