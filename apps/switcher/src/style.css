@@ -243,3 +243,16 @@ window.nyx-overview .ov-icon-button > button:hover {
   background: @row_hover;
   color: @theme_text;
 }
+
+/* ---------- Groups (tabs) ---------- */
+
+window.nyx-switcher .sw-tabs,
+window.nyx-overview .sw-tabs {
+  margin: 6px;
+  padding: 1px 7px;
+  border-radius: 7px;
+  background: alpha(@theme_popover, 0.92);
+  color: @theme_text;
+  font-size: 11px;
+  font-weight: 600;
+}

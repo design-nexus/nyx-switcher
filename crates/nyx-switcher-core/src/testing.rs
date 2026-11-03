@@ -46,6 +46,7 @@ pub fn window(n: i32, class: &str, title: &str, workspace: i64, monitor: i64) ->
         pinned: false,
         hidden: false,
         urgent: false,
+        grouped: Vec::new(),
     }
 }
 
@@ -62,6 +63,10 @@ pub fn desktop() -> Desktop {
     for (i, w) in windows.iter_mut().enumerate() {
         w.focus_order = i as i32;
     }
+    // Term 1 and web 1 (both on workspace 1) are tabs of one group; term 1 shows.
+    windows[0].grouped = vec!["a1".into(), "a2".into()];
+    windows[1].grouped = vec!["a1".into(), "a2".into()];
+    windows[1].hidden = true;
     Desktop {
         monitors: vec![monitor(0, "eDP-1", true, 1), monitor(1, "DP-1", false, 11)],
         workspaces: vec![

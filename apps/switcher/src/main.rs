@@ -50,9 +50,9 @@ fn main() -> ExitCode {
             None => client("overview", None),
         },
         Some("--hide") => client("hide", None),
-        Some("--integrate") => report(integration::apply(Some(&Config::load().keys), args.iter().any(|a| a == "--force"))),
+        Some("--integrate") => report(integration::apply(Some(&Config::load()), args.iter().any(|a| a == "--force"))),
         Some("--unintegrate") => report(integration::apply(None, true)),
-        Some("--check-keys") => match integration::check(&Config::load().keys) {
+        Some("--check-keys") => match integration::check(&Config::load()) {
             Ok(list) => {
                 for c in &list {
                     println!("{}: {}{}", c.key, c.other, if c.expected { " (Omarchy's, replaced)" } else { "" });

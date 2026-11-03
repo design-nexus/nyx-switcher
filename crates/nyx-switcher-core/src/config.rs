@@ -55,6 +55,27 @@ impl Default for Keys {
     }
 }
 
+/// How large window thumbnails are.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Size {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl Size {
+    /// Scale for the medium size.
+    pub fn factor(self) -> f64 {
+        match self {
+            Size::Small => 0.78,
+            Size::Medium => 1.0,
+            Size::Large => 1.3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -68,6 +89,11 @@ pub struct Config {
     pub show_delay_ms: u32,
     /// Fade the switcher in and out.
     pub animation: bool,
+    /// Show each Hyprland group (tabs) once in the window switcher; ↓ lists its windows.
+    pub collapse_groups: bool,
+    pub thumbnail_size: Size,
+    /// A touchpad swipe that opens the overview: `"4 up"`, `"3 down"`; empty for none.
+    pub gesture: String,
     pub keys: Keys,
 }
 
@@ -79,6 +105,9 @@ impl Default for Config {
             thumbnails: true,
             show_delay_ms: 80,
             animation: true,
+            collapse_groups: true,
+            thumbnail_size: Size::Medium,
+            gesture: String::new(),
             keys: Keys::default(),
         }
     }
@@ -132,6 +161,8 @@ mod tests {
         assert_eq!(c.keys.apps, "");
         assert_eq!(c.keys.windows, "ALT + TAB");
         assert!(c.thumbnails);
+        assert!(c.collapse_groups && c.gesture.is_empty());
+        assert_eq!(Config::parse("thumbnail_size = \"large\"").unwrap().thumbnail_size, Size::Large);
     }
 
     #[test]

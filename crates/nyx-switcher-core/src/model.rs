@@ -61,14 +61,30 @@ pub struct Item {
     pub minimized: bool,
     pub urgent: bool,
     pub floating: bool,
-    /// Every window of the entry, most recent first (one in window modes).
+    /// Its Hyprland group (tabs), in group order, itself included; empty if none.
+    pub group: Vec<String>,
+    /// The tab the group shows (always true outside a group).
+    pub visible_tab: bool,
+    /// Every window of the entry, most recent first: one, an app's windows, or a
+    /// collapsed group's.
     pub windows: Vec<String>,
 }
 
 impl Item {
     /// What identifies the entry across refreshes.
     pub fn id(&self, mode: Mode) -> &str {
-        if mode == Mode::Apps { &self.app } else { &self.address }
+        if mode == Mode::Apps {
+            &self.app
+        } else {
+            // A collapsed group keeps one id however its focus moves.
+            self.group.first().filter(|_| self.windows.len() > 1).unwrap_or(&self.address)
+        }
+    }
+
+    /// Its place in its group: (1-based tab, tabs), or None outside a group.
+    pub fn tab(&self) -> Option<(usize, usize)> {
+        let i = self.group.iter().position(|a| a == &self.address)?;
+        (self.group.len() > 1).then_some((i + 1, self.group.len()))
     }
 }
 
@@ -79,6 +95,10 @@ pub struct Filter {
     pub show_agent_workspaces: bool,
     /// Only this app's windows (an app expanded in the app switcher).
     pub app: Option<String>,
+    /// Only these windows (a group expanded in the window switcher).
+    pub only: Option<Vec<String>>,
+    /// One entry per Hyprland group in the window switcher.
+    pub collapse_groups: bool,
 }
 
 fn is_agent(name: &str) -> bool {
@@ -111,6 +131,9 @@ pub fn windows(desktop: &Desktop, index: &Index, filter: &Filter) -> Vec<Item> {
         if filter.app.as_ref().is_some_and(|a| a != &app) {
             continue;
         }
+        if filter.only.as_ref().is_some_and(|only| !only.contains(&w.address)) {
+            continue;
+        }
         out.push(Item {
             app,
             address: w.address.clone(),
@@ -123,6 +146,8 @@ pub fn windows(desktop: &Desktop, index: &Index, filter: &Filter) -> Vec<Item> {
             minimized,
             urgent: w.urgent,
             floating: w.floating,
+            group: w.grouped.clone(),
+            visible_tab: !w.hidden || w.grouped.is_empty(),
             windows: vec![w.address.clone()],
         });
     }
@@ -144,10 +169,28 @@ pub fn apps(windows: Vec<Item>) -> Vec<Item> {
     out
 }
 
+/// One entry per Hyprland group, standing for its most recent window; windows outside
+/// a group stay as they are.
+pub fn collapse_groups(windows: Vec<Item>) -> Vec<Item> {
+    let mut out: Vec<Item> = Vec::new();
+    for w in windows {
+        let first = w.group.first().cloned();
+        match first.and_then(|g| out.iter_mut().find(|o| o.group.first() == Some(&g))) {
+            Some(o) => {
+                o.windows.push(w.address);
+                o.urgent |= w.urgent;
+            }
+            None => out.push(w),
+        }
+    }
+    out
+}
+
 /// The entries for `mode`. `SameApp` lists the windows of the focused window's app
 /// (empty when no window has focus).
 pub fn items(desktop: &Desktop, index: &Index, mode: Mode, filter: &Filter) -> Vec<Item> {
     match mode {
+        Mode::Windows if filter.collapse_groups && filter.only.is_none() => collapse_groups(windows(desktop, index, filter)),
         Mode::Windows => windows(desktop, index, filter),
         Mode::Apps => apps(windows(desktop, index, filter)),
         Mode::SameApp => {
@@ -155,7 +198,7 @@ pub fn items(desktop: &Desktop, index: &Index, mode: Mode, filter: &Filter) -> V
                 return Vec::new();
             };
             let app = key_for(index, &active.class, &active.initial_class);
-            windows(desktop, index, &Filter { app: Some(app), ..filter.clone() })
+            windows(desktop, index, &Filter { app: Some(app), collapse_groups: false, ..filter.clone() })
         }
     }
 }
@@ -205,6 +248,23 @@ mod tests {
         assert_eq!(names, ["Alacritty", "org.mozilla.firefox", "class:notes"]);
         assert_eq!(a[0].windows, ["a1", "a3"]);
         assert_eq!(a[0].address, "a1");
+    }
+
+    #[test]
+    fn groups_collapse_to_their_latest_window() {
+        let d = desktop();
+        let f = Filter { collapse_groups: true, ..Default::default() };
+        let w = items(&d, &index(), Mode::Windows, &f);
+        assert_eq!(titles(&w), ["term 1", "term 2", "web 2", "minimized notes"]);
+        assert_eq!(w[0].windows, ["a1", "a2"]);
+        assert_eq!(w[0].id(Mode::Windows), "a1", "the group's id");
+        assert_eq!(w[0].tab(), Some((1, 2)));
+        // Expanded: just the group's windows, one each.
+        let only = Filter { only: Some(w[0].windows.clone()), ..f };
+        let tabs = items(&d, &index(), Mode::Windows, &only);
+        assert_eq!(titles(&tabs), ["term 1", "web 1"]);
+        assert!(!tabs[1].visible_tab);
+        assert_eq!(tabs[1].tab(), Some((2, 2)));
     }
 
     #[test]

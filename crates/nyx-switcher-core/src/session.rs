@@ -6,13 +6,24 @@
 
 use crate::model::{Item, Mode};
 
+/// An entry opened up to show its windows: an app (from the app switcher) or a
+/// Hyprland group (from the window switcher).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expanded {
+    /// The mode to go back to.
+    pub from: Mode,
+    /// The entry's id in that mode (an app key, or a group's id).
+    pub id: String,
+    /// Its windows when it was opened (a group's; an app's are found by `id`).
+    pub windows: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Session {
     pub mode: Mode,
     pub items: Vec<Item>,
     pub selected: usize,
-    /// The app whose windows are shown, when one was expanded from the app switcher.
-    pub expanded: Option<String>,
+    pub expanded: Option<Expanded>,
 }
 
 impl Session {
@@ -72,28 +83,35 @@ impl Session {
         true
     }
 
-    /// Show the windows of the selected app instead (`windows`: its windows, most recent
-    /// first). Only from the app switcher.
+    /// Whether the selected entry opens up: an app, or a collapsed group.
+    pub fn can_expand(&self) -> bool {
+        self.expanded.is_none()
+            && self.selected().is_some_and(|i| self.mode == Mode::Apps || (self.mode == Mode::Windows && i.windows.len() > 1))
+    }
+
+    /// Show the selected entry's windows instead (`windows`, most recent first).
     pub fn expand(&mut self, windows: Vec<Item>) -> bool {
-        if self.mode != Mode::Apps || windows.is_empty() {
+        if !self.can_expand() || windows.is_empty() {
             return false;
         }
-        self.expanded = self.selected().map(|i| i.app.clone());
+        let Some(sel) = self.selected() else { return false };
+        self.expanded = Some(Expanded { from: self.mode, id: sel.id(self.mode).to_string(), windows: sel.windows.clone() });
         self.mode = Mode::Windows;
         self.items = windows;
         self.selected = 0;
         true
     }
 
-    /// Back from an expanded app to all apps (`apps`), with that app selected.
-    pub fn collapse(&mut self, apps: Vec<Item>) -> bool {
-        let Some(app) = self.expanded.take() else { return false };
-        if apps.is_empty() {
+    /// Back from an expanded entry to the list it came from (`items`, in that mode),
+    /// with the entry selected.
+    pub fn collapse(&mut self, items: Vec<Item>) -> bool {
+        let Some(e) = self.expanded.take() else { return false };
+        if items.is_empty() {
             return false;
         }
-        self.mode = Mode::Apps;
-        self.selected = apps.iter().position(|a| a.app == app).unwrap_or(0);
-        self.items = apps;
+        self.mode = e.from;
+        self.selected = items.iter().position(|i| i.id(e.from) == e.id).unwrap_or(0);
+        self.items = items;
         true
     }
 }
@@ -169,5 +187,23 @@ mod tests {
         assert!(s.collapse(apps));
         assert_eq!(s.selected().unwrap().app, "class:firefox");
         assert_eq!(s.mode, Mode::Apps);
+    }
+
+    #[test]
+    fn expand_and_collapse_a_group() {
+        let d = desktop();
+        let idx = Index::default();
+        let f = Filter { collapse_groups: true, ..Default::default() };
+        let collapsed = items(&d, &idx, Mode::Windows, &f);
+        let mut s = Session::start(Mode::Windows, collapsed.clone(), Some("a1"), true).unwrap();
+        assert!(!s.can_expand(), "term 2 is on its own");
+        s.select(0);
+        assert!(s.can_expand());
+        let tabs = items(&d, &idx, Mode::Windows, &Filter { only: Some(s.items[0].windows.clone()), ..f });
+        assert!(s.expand(tabs));
+        assert_eq!(s.expanded.as_ref().unwrap().windows, ["a1", "a2"]);
+        assert_eq!(s.items.len(), 2);
+        assert!(s.collapse(collapsed));
+        assert_eq!((s.mode, s.selected), (Mode::Windows, 0));
     }
 }

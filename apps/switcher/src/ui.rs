@@ -15,7 +15,7 @@ use nyx_desktop::{Desktop, watch};
 use nyx_switcher_core::binds;
 use nyx_switcher_core::config::{Config, Scope};
 use nyx_switcher_core::model::{self, Filter, Item, Mode};
-use nyx_switcher_core::session::Session;
+use nyx_switcher_core::session::{Expanded, Session};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -28,6 +28,11 @@ const WINDOW_TILE: i32 = 184;
 const THUMB_TILE: i32 = 256;
 const THUMB_W: i32 = 232;
 const THUMB_H: i32 = 146;
+
+/// A thumbnail size scaled for the chosen thumbnail size.
+fn scaled(px: i32, config: &Config) -> i32 {
+    (px as f64 * config.thumbnail_size.factor()).round() as i32
+}
 /// A window is captured again on losing focus at most this often.
 const RECAPTURE: Duration = Duration::from_millis(800);
 
@@ -297,7 +302,11 @@ impl Switcher {
                 }
             }
             Kind::Step { mode, forward } => {
-                let same = self.session.borrow().as_ref().map(|s| s.mode == mode || (s.expanded.is_some() && mode == Mode::Apps));
+                let same = self
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .map(|s| s.mode == mode || s.expanded.as_ref().is_some_and(|e| e.from == mode));
                 match same {
                     Some(true) => {
                         if let Some(s) = self.session.borrow_mut().as_mut() {
@@ -362,18 +371,28 @@ impl Switcher {
         }
     }
 
+    /// `sticky_all`: the overview's list (every window, every tab).
     fn filter(&self, app: Option<String>, sticky_all: bool) -> Filter {
         let c = self.config.borrow();
         Filter {
             scope: if sticky_all { Scope::All } else { c.scope },
             show_agent_workspaces: c.show_agent_workspaces,
             app,
+            only: None,
+            collapse_groups: c.collapse_groups && !sticky_all,
         }
     }
 
-    fn items(&self, mode: Mode, app: Option<String>) -> Vec<Item> {
+    /// The entries for `mode`, or for an expanded app or group, narrowed by the search.
+    fn items(&self, mode: Mode, expanded: Option<&Expanded>) -> Vec<Item> {
         let desktop = self.desktop.borrow().clone();
-        let mut items = model::items(&desktop, &self.index.borrow(), mode, &self.filter(app, false));
+        let mut filter = self.filter(None, false);
+        match expanded {
+            Some(e) if e.from == Mode::Apps => filter.app = Some(e.id.clone()),
+            Some(e) => filter.only = Some(e.windows.clone()),
+            None => {}
+        }
+        let mut items = model::items(&desktop, &self.index.borrow(), mode, &filter);
         let query = self.query.borrow();
         if !query.is_empty() {
             items.retain(|i| nyx_switcher_core::overview::matches(i, &app_name(i), &query));
@@ -484,7 +503,7 @@ impl Switcher {
         let tile = if self.session.borrow().as_ref().is_some_and(|s| s.mode == Mode::Apps) {
             APP_TILE
         } else if self.config.borrow().thumbnails {
-            THUMB_TILE
+            scaled(THUMB_TILE, &self.config.borrow())
         } else {
             WINDOW_TILE
         };
@@ -630,8 +649,8 @@ impl Switcher {
         }
         let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
         let cols = self.grid.max_children_per_line().max(1) as isize;
-        let mode = self.session.borrow().as_ref().map(|s| s.mode);
         let expanded = self.session.borrow().as_ref().is_some_and(|s| s.expanded.is_some());
+        let can_expand = self.session.borrow().as_ref().is_some_and(|s| s.can_expand());
         match key {
             gdk::Key::Escape => self.cancel(),
             gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::space => self.commit(),
@@ -639,7 +658,8 @@ impl Switcher {
             gdk::Key::grave | gdk::Key::asciitilde => self.move_by(if shift { -1 } else { 1 }),
             gdk::Key::Left | gdk::Key::KP_Left => self.move_by(-1),
             gdk::Key::Right | gdk::Key::KP_Right => self.move_by(1),
-            gdk::Key::Down | gdk::Key::KP_Down if mode == Some(Mode::Apps) => self.expand(),
+            // ↓ opens an app (app switcher) or a group of tabs (window switcher).
+            gdk::Key::Down | gdk::Key::KP_Down if can_expand => self.expand(),
             gdk::Key::Up | gdk::Key::KP_Up if expanded && self.selected_index() < cols as usize => self.collapse(),
             gdk::Key::Down | gdk::Key::KP_Down => self.move_row(cols),
             gdk::Key::Up | gdk::Key::KP_Up => self.move_row(-cols),
@@ -668,11 +688,11 @@ impl Switcher {
         let query = self.query.borrow().clone();
         self.query_label.set_text(&format!("“{query}”"));
         self.query_label.set_visible(!query.is_empty());
-        let (mode, app) = match self.session.borrow().as_ref() {
+        let (mode, expanded) = match self.session.borrow().as_ref() {
             Some(s) => (s.mode, s.expanded.clone()),
             None => return,
         };
-        let items = self.items(mode, app);
+        let items = self.items(mode, expanded.as_ref());
         if let Some(s) = self.session.borrow_mut().as_mut() {
             if !s.refresh(items) {
                 s.items.clear();
@@ -719,10 +739,14 @@ impl Switcher {
         self.show_selection();
     }
 
+    /// Open up the selected app or group to its windows.
     fn expand(&self) {
-        let app = self.session.borrow().as_ref().and_then(|s| s.selected().map(|i| i.app.clone()));
-        let Some(app) = app else { return };
-        let windows = self.items(Mode::Windows, Some(app));
+        let target = self.session.borrow().as_ref().and_then(|s| {
+            let i = s.selected()?;
+            Some(Expanded { from: s.mode, id: i.id(s.mode).to_string(), windows: i.windows.clone() })
+        });
+        let Some(target) = target else { return };
+        let windows = self.items(Mode::Windows, Some(&target));
         let changed = self.session.borrow_mut().as_mut().is_some_and(|s| s.expand(windows));
         if changed {
             self.relayout();
@@ -730,8 +754,9 @@ impl Switcher {
     }
 
     fn collapse(&self) {
-        let apps = self.items(Mode::Apps, None);
-        let changed = self.session.borrow_mut().as_mut().is_some_and(|s| s.collapse(apps));
+        let Some(from) = self.session.borrow().as_ref().and_then(|s| s.expanded.as_ref().map(|e| e.from)) else { return };
+        let items = self.items(from, None);
+        let changed = self.session.borrow_mut().as_mut().is_some_and(|s| s.collapse(items));
         if changed {
             self.relayout();
         }
@@ -747,11 +772,11 @@ impl Switcher {
 
     /// Windows opened, closed or were renamed during a session.
     fn desktop_changed(&self) {
-        let (mode, app) = match self.session.borrow().as_ref() {
+        let (mode, expanded) = match self.session.borrow().as_ref() {
             Some(s) => (s.mode, s.expanded.clone()),
             None => return,
         };
-        let items = self.items(mode, app);
+        let items = self.items(mode, expanded.as_ref());
         let alive = self.session.borrow_mut().as_mut().is_some_and(|s| s.refresh(items));
         if alive {
             self.render();
@@ -873,10 +898,14 @@ impl Switcher {
     /// A window as its thumbnail (the app icon until one arrives), title and place.
     pub(crate) fn thumb_tile(&self, item: &Item) -> (gtk::Box, gtk::Overlay) {
         let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        b.set_size_request(THUMB_TILE - 16, -1);
+        let (tile_w, thumb_w, thumb_h) = {
+            let c = self.config.borrow();
+            (scaled(THUMB_TILE, &c), scaled(THUMB_W, &c), scaled(THUMB_H, &c))
+        };
+        b.set_size_request(tile_w - 16, -1);
         let frame = gtk::Overlay::new();
         frame.add_css_class("sw-thumb");
-        frame.set_size_request(THUMB_W, THUMB_H);
+        frame.set_size_request(thumb_w, thumb_h);
         frame.set_overflow(gtk::Overflow::Hidden);
         let icon = gtk::Image::from_gicon(&app_icon(item));
         icon.set_pixel_size(56);
@@ -894,6 +923,19 @@ impl Switcher {
         badge_icon.set_valign(gtk::Align::End);
         frame.add_overlay(&picture);
         frame.add_overlay(&badge_icon);
+        // A group of tabs: how many (collapsed), or which one (each tab).
+        let tabs = if item.windows.len() > 1 && item.tab().is_some() {
+            Some(format!("{} tabs", item.windows.len()))
+        } else {
+            item.tab().map(|(i, n)| format!("Tab {i} of {n}"))
+        };
+        if let Some(text) = tabs {
+            let l = gtk::Label::new(Some(&text));
+            l.add_css_class("sw-tabs");
+            l.set_halign(gtk::Align::Start);
+            l.set_valign(gtk::Align::Start);
+            frame.add_overlay(&l);
+        }
         let cached = self.thumbs.borrow().get(&item.stable_id).cloned();
         let has = cached.is_some();
         picture.set_paintable(cached.as_ref());
@@ -946,7 +988,11 @@ impl Switcher {
         let w = self.weak();
         let (n, started) = (ids.len(), Instant::now());
         let done = Cell::new(0);
-        nyx_desktop::capture::capture(ids, THUMB_W as u32 * scale, THUMB_H as u32 * scale, move |shot| {
+        let (w_px, h_px) = {
+            let c = self.config.borrow();
+            (scaled(THUMB_W, &c) as u32 * scale, scaled(THUMB_H, &c) as u32 * scale)
+        };
+        nyx_desktop::capture::capture(ids, w_px, h_px, move |shot| {
             let Some(sw) = w.upgrade() else { return };
             done.set(done.get() + 1);
             sw.log(&format!("thumbnail {}/{n} after {:.1} ms", done.get(), started.elapsed().as_secs_f64() * 1000.0));
@@ -1018,7 +1064,12 @@ impl Switcher {
             self.detail.set_text(&if n == 1 { "1 window".to_string() } else { format!("{n} windows · ↓ to choose") });
         } else {
             self.caption.set_text(if item.title.is_empty() { &item.class } else { &item.title });
-            self.detail.set_text(&format!("{} · {}", app_name(item), place(item, &desktop)));
+            let group = if item.windows.len() > 1 {
+                format!(" · {} tabs · ↓ to choose", item.windows.len())
+            } else {
+                item.tab().map(|(i, n)| format!(" · tab {i} of {n}")).unwrap_or_default()
+            };
+            self.detail.set_text(&format!("{} · {}{group}", app_name(item), place(item, &desktop)));
         }
     }
 }

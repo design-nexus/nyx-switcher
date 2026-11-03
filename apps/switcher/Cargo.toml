@@ -16,6 +16,6 @@ async-channel = "2"
 gtk = { version = "0.11", package = "gtk4", features = ["v4_18"] }
 gio-unix = "0.22"
 gtk4-layer-shell = "0.8"
-nyx-desktop = { git = "https://github.com/design-nexus/nyx-core.git", rev = "2dae114649367bfe5ad9239562429457087b1076", features = ["capture"] }
+nyx-desktop = { git = "https://github.com/design-nexus/nyx-core.git", rev = "a3b8fdf1d592ed9e44531747c70dfb49d65077b8", features = ["capture"] }
 nyx-switcher-core = { path = "../../crates/nyx-switcher-core" }
 nyx-theme = { git = "https://github.com/design-nexus/nyx-design.git", rev = "976fed940841a2a505ffe644f632cb60e12988a8" }

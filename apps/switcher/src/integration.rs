@@ -3,7 +3,7 @@
 //! removed. Hyprland reloads, and a configuration it rejects is rolled back.
 
 use nyx_switcher_core::binds::{self, Conflict};
-use nyx_switcher_core::config::Keys;
+use nyx_switcher_core::config::Config;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -57,20 +57,40 @@ fn write_atomic(file: &Path, text: &str) -> Result<(), String> {
     std::fs::rename(&tmp, file).map_err(|e| e.to_string())
 }
 
-/// Other bindings on `keys` right now (Omarchy's that are replaced on purpose are
-/// marked `expected`).
-pub fn check(keys: &Keys) -> Result<Vec<Conflict>, String> {
-    binds::conflicts(&hyprctl(&["-j", "binds"])?, keys)
+/// Other bindings on the keys right now (Omarchy's that are replaced on purpose are
+/// marked `expected`), and other gestures on the same swipe in `~/.config/hypr/*.lua`.
+pub fn check(config: &Config) -> Result<Vec<Conflict>, String> {
+    let mut out = binds::conflicts(&hyprctl(&["-j", "binds"])?, &config.keys)?;
+    if !config.gesture.is_empty() {
+        let dir = config_home().join("hypr");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "lua")).collect())
+            .unwrap_or_default();
+        files.sort();
+        for f in files {
+            let text = std::fs::read_to_string(&f).unwrap_or_default();
+            for line in binds::gesture_conflicts(&text, &config.gesture) {
+                let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                out.push(Conflict { key: format!("{}-finger swipe {}", &config.gesture[..1], &config.gesture[2..]), other: format!("{name}: {line}"), expected: false });
+            }
+        }
+    }
+    Ok(out)
 }
 
-/// Bind `keys` (None removes the block, giving the keys back to Omarchy). A key that
-/// another binding (not one of Omarchy's known ones) uses is refused unless `force`.
-pub fn apply(keys: Option<&Keys>, force: bool) -> Result<String, String> {
-    if let Some(keys) = keys {
+/// Bind the keys and gesture of `config` (None removes the block, giving the keys back
+/// to Omarchy). A key or swipe that something else (not one of Omarchy's known keys)
+/// uses is refused unless `force`.
+pub fn apply(config: Option<&Config>, force: bool) -> Result<String, String> {
+    if let Some(config) = config {
+        let keys = &config.keys;
         if let Some(bad) = binds::binds(keys).iter().find(|b| !binds::valid_key(&b.key)) {
             return Err(format!("“{}” isn't a key Hyprland takes (like ALT + TAB)", bad.key));
         }
-        let others: Vec<Conflict> = check(keys).unwrap_or_default().into_iter().filter(|c| !c.expected).collect();
+        if !config.gesture.is_empty() && binds::parse_gesture(&config.gesture).is_none() {
+            return Err(format!("“{}” isn't a swipe (like 4 up)", config.gesture));
+        }
+        let others: Vec<Conflict> = check(config).unwrap_or_default().into_iter().filter(|c| !c.expected).collect();
         if !others.is_empty() && !force {
             let list: Vec<String> = others.iter().map(|c| format!("{} ({})", c.key, c.other)).collect();
             return Err(format!("already bound: {}. Change the keys in switcher.toml, or run --integrate --force", list.join(", ")));
@@ -80,7 +100,7 @@ pub fn apply(keys: Option<&Keys>, force: bool) -> Result<String, String> {
     let original = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
     let owned = owned_file();
     let old = std::fs::read_to_string(&owned).ok();
-    let new = keys.map(binds::block);
+    let new = config.map(|c| binds::block(&c.keys, &c.gesture));
     let changed = binds::edit(&original, old.as_deref(), new.as_deref())?;
     if changed == original {
         return Ok(String::new());
@@ -99,8 +119,14 @@ pub fn apply(keys: Option<&Keys>, force: bool) -> Result<String, String> {
             let _ = std::fs::remove_file(owned);
         }
     }
-    Ok(match keys {
-        Some(k) => binds::binds(k).iter().map(|b| format!("{}: {}", b.key, b.description)).collect::<Vec<_>>().join("\n"),
+    Ok(match config {
+        Some(c) => {
+            let mut lines: Vec<String> = binds::binds(&c.keys).iter().map(|b| format!("{}: {}", b.key, b.description)).collect();
+            if let Some((f, d)) = binds::parse_gesture(&c.gesture) {
+                lines.push(format!("{f}-finger swipe {d}: Show all windows"));
+            }
+            lines.join("\n")
+        }
         None => "The shortcuts are Omarchy's again.".into(),
     })
 }

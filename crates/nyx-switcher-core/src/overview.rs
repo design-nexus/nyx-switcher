@@ -60,6 +60,35 @@ pub fn groups(desktop: &Desktop, items: Vec<Item>) -> Vec<Group> {
         }
     };
     out.sort_by_key(|g| (g.minimized, g.workspace < 0, monitor_rank(g), g.workspace));
+    for g in &mut out {
+        g.items = tabs_together(std::mem::take(&mut g.items));
+    }
+    out
+}
+
+/// The tabs of a group side by side, in group order, where its most recent tab was.
+fn tabs_together(items: Vec<Item>) -> Vec<Item> {
+    let mut out: Vec<Item> = Vec::with_capacity(items.len());
+    let mut rest = items;
+    while !rest.is_empty() {
+        let first = rest.remove(0);
+        if first.group.len() < 2 {
+            out.push(first);
+            continue;
+        }
+        let group = first.group.clone();
+        let mut members = vec![first];
+        rest.retain(|i| {
+            if i.group.first() == group.first() {
+                members.push(i.clone());
+                false
+            } else {
+                true
+            }
+        });
+        members.sort_by_key(|m| group.iter().position(|a| a == &m.address).unwrap_or(usize::MAX));
+        out.extend(members);
+    }
     out
 }
 
@@ -87,6 +116,21 @@ mod tests {
         assert_eq!(g[0].items.len(), 2);
         assert!(g[0].visible && !g[1].visible && g[2].visible, "11 is shown on DP-1");
         assert_eq!(g[2].monitor, "DP-1");
+    }
+
+    #[test]
+    fn tabs_of_a_group_stay_together() {
+        let mut d = desktop();
+        // Group term 2 (workspace 2) with a new tab that was used least recently.
+        let mut extra = crate::testing::window(9, "Alacritty", "term 9", 2, 0);
+        extra.focus_order = 99;
+        d.windows.push(extra);
+        d.windows[2].grouped = vec!["a9".into(), "a3".into()];
+        d.windows.last_mut().unwrap().grouped = vec!["a9".into(), "a3".into()];
+        let all = items(&d, &Index::default(), Mode::Windows, &Filter::default());
+        let g = groups(&d, all);
+        let ws2: Vec<&str> = g[1].items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(ws2, ["term 9", "term 2"], "group order");
     }
 
     #[test]

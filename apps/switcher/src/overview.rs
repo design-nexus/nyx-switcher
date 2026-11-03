@@ -294,7 +294,12 @@ impl Overview {
         close.set_tooltip_text(Some("Close · Ctrl+W"));
         let addr = item.address.clone();
         close.connect_clicked(move |_| run(actions::close_window(&addr)));
-        for b in [float.upcast_ref::<gtk::Widget>(), mv.upcast_ref(), close.upcast_ref()] {
+        let ungroup = gtk::Button::from_icon_name("edit-cut-symbolic");
+        ungroup.set_tooltip_text(Some("Take out of the group · Ctrl+G"));
+        ungroup.set_visible(item.group.len() > 1);
+        let addr = item.address.clone();
+        ungroup.connect_clicked(move |_| run(actions::leave_group(&addr)));
+        for b in [ungroup.upcast_ref::<gtk::Widget>(), float.upcast_ref(), mv.upcast_ref(), close.upcast_ref()] {
             b.add_css_class("ov-icon-button");
             bar.append(b);
         }
@@ -350,6 +355,11 @@ impl Overview {
             gdk::Key::w | gdk::Key::W if ctrl => {
                 if let Some(i) = item {
                     run(actions::close_window(&i.address));
+                }
+            }
+            gdk::Key::g | gdk::Key::G if ctrl => {
+                if let Some(i) = item.filter(|i| i.group.len() > 1) {
+                    run(actions::leave_group(&i.address));
                 }
             }
             gdk::Key::t | gdk::Key::T if ctrl => {

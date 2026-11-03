@@ -24,7 +24,10 @@ It runs as a user service (`nyx-switcher.service`) and binds its keys in Hyprlan
 While the switcher is open: Tab and Shift+Tab or the arrow keys move, Home and End
 jump to either end, Enter switches, Esc closes without switching, and a click switches
 to that window. Type to narrow the list by title or app name (Backspace widens it
-again), and Delete closes the selected window. A quick tap goes straight back to the
+again), and Delete closes the selected window.
+
+Windows grouped as tabs in Hyprland show once, as their most recent tab with a tab
+count; ↓ lists the tabs and ↑ goes back. Turn this off with `collapse_groups = false`. A quick tap goes straight back to the
 previous window without showing anything.
 
 ## Overview
@@ -36,9 +39,12 @@ to it. Each window has buttons, and keys, to act on it without going there:
 
 | Button | Key | |
 |---|---|---|
+| Take out of the group | Ctrl+G | for a tab of a group; it tiles beside the group |
 | Float / Tile | Ctrl+T | switch between floating and tiled |
 | Move | Ctrl+1…9, Ctrl+M | to another workspace (silently), or to the next monitor |
 | Close | Ctrl+W | the app may still ask about unsaved work |
+
+Tabs of one group sit side by side, each marked with its place in the group.
 
 Nyx Dock's right-click menu has Show windows, which opens the overview on that app's
 windows (`nyx-switcher-send overview <desktop id>`).
@@ -59,6 +65,9 @@ optional, and changes apply the next time the switcher opens.
 scope = "all"                 # "all", "monitor" (the focused one) or "workspace" (the one in front)
 show_agent_workspaces = false # also list windows on agent workspaces (named nyx-agent…)
 thumbnails = true             # window thumbnails (false: app icons)
+thumbnail_size = "medium"     # "small", "medium" or "large"
+collapse_groups = true        # one entry per group of tabs in the window switcher
+gesture = ""                  # a touchpad gesture for the overview: "5 up", "5 down", "4 pinchout", …
 show_delay_ms = 80            # how long a key is held before the switcher appears
 animation = true
 
@@ -72,8 +81,11 @@ same_app_reverse = "ALT + SHIFT + grave"
 overview = "SUPER + ALT + W"
 ```
 
-After changing `[keys]`, run `nyx-switcher --integrate`. It refuses a key another
-binding already uses (`nyx-switcher --check-keys` lists them) unless you add `--force`.
+After changing `[keys]` or `gesture`, run `nyx-switcher --integrate`. It refuses a key
+another binding already uses, or a gesture another `hl.gesture` in
+`~/.config/hypr/*.lua` already uses (`nyx-switcher --check-keys` lists them), unless
+you add `--force`. Hyprland itself refuses a gesture that an earlier one overshadows,
+and the change is then undone.
 
 Special workspaces (scratchpad, Quake console) aren't listed; minimized windows are.
 

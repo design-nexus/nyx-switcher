@@ -105,8 +105,57 @@ fn lua_string(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// The block for `keys`. Keys that aren't valid are left out.
-pub fn block(keys: &Keys) -> String {
+/// A swipe or pinch as the settings write it (`"5 up"`, `"4 pinchout"`): fingers and
+/// direction.
+pub fn parse_gesture(g: &str) -> Option<(u32, &'static str)> {
+    let mut w = g.split_whitespace();
+    let fingers: u32 = w.next()?.parse().ok().filter(|f| (3..=5).contains(f))?;
+    let dir = match w.next()? {
+        "up" => "up",
+        "down" => "down",
+        "left" => "left",
+        "right" => "right",
+        "pinchin" => "pinchin",
+        "pinchout" => "pinchout",
+        _ => return None,
+    };
+    w.next().is_none().then_some((fingers, dir))
+}
+
+/// Other `hl.gesture` lines in `lua` (a Hyprland config file) on the same swipe as
+/// `gesture`, including a `vertical`/`horizontal` one that covers it. Comments and
+/// the switcher's own block are skipped.
+pub fn gesture_conflicts(lua: &str, gesture: &str) -> Vec<String> {
+    let Some((fingers, dir)) = parse_gesture(gesture) else { return Vec::new() };
+    let axis = match dir {
+        "up" | "down" => "vertical",
+        "left" | "right" => "horizontal",
+        _ => "pinch",
+    };
+    let mut ours = false;
+    let mut out = Vec::new();
+    for line in lua.lines() {
+        let t = line.trim();
+        if t.starts_with(START) {
+            ours = true;
+        } else if t.starts_with(END) {
+            ours = false;
+        }
+        if ours || t.starts_with("--") || !t.contains("hl.gesture(") {
+            continue;
+        }
+        let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+        let same_fingers = compact.contains(&format!("fingers={fingers},")) || compact.contains(&format!("fingers={fingers}}}"));
+        let same_dir = [dir, axis].iter().any(|d| compact.contains(&format!("direction=\"{d}\"")));
+        if same_fingers && same_dir {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+/// The block for `keys` and `gesture`. Keys that aren't valid are left out.
+pub fn block(keys: &Keys, gesture: &str) -> String {
     let mut out = format!("{START}\n-- Owned by Switcher. Change the keys in Settings → Desktop → Switcher.\n");
     for b in binds(keys).into_iter().filter(|b| valid_key(&b.key)) {
         out.push_str(&format!(
@@ -114,6 +163,11 @@ pub fn block(keys: &Keys) -> String {
             k = lua_string(&b.key),
             d = lua_string(b.description),
             c = lua_string(b.command)
+        ));
+    }
+    if let Some((fingers, dir)) = parse_gesture(gesture) {
+        out.push_str(&format!(
+            "hl.gesture({{ fingers = {fingers}, direction = \"{dir}\", action = function() hl.exec_cmd(\"nyx-switcher-send overview\") end }})\n"
         ));
     }
     out.push_str(END);
@@ -216,7 +270,7 @@ mod tests {
     #[test]
     fn block_unbinds_then_binds_each_key() {
         let keys = Keys { overview: String::new(), ..Default::default() };
-        let b = block(&keys);
+        let b = block(&keys, "");
         assert!(b.starts_with(START) && b.ends_with(&format!("{END}\n")));
         assert!(b.contains("hl.unbind(\"ALT + TAB\")\no.bind(\"ALT + TAB\", \"Switch windows\", \"nyx-switcher-send next windows\")"));
         assert!(b.contains("\"SUPER + SHIFT + TAB\", \"Switch apps backwards\", \"nyx-switcher-send prev apps\""));
@@ -225,16 +279,38 @@ mod tests {
 
     #[test]
     fn owns_only_its_block() {
-        let b = block(&Keys::default());
+        let b = block(&Keys::default(), "");
         let added = edit("a\n", None, Some(&b)).unwrap();
         assert_eq!(added, format!("a\n{b}"));
         let other = Keys { apps: "SUPER + CTRL + TAB".into(), ..Default::default() };
-        let changed = edit(&added, Some(&b), Some(&block(&other))).unwrap();
+        let changed = edit(&added, Some(&b), Some(&block(&other, ""))).unwrap();
         assert!(changed.contains("SUPER + CTRL + TAB") && !changed.contains("\"SUPER + TAB\""));
         assert_eq!(edit(&added, Some(&b), None).unwrap(), "a\n");
         let hand = added.replace("send next windows", "send next apps");
         assert!(edit(&hand, Some(&b), None).is_err());
         assert!(edit(&format!("{added}{b}"), Some(&b), None).is_err(), "two blocks");
+    }
+
+    #[test]
+    fn gestures() {
+        assert_eq!(parse_gesture("4 up"), Some((4, "up")));
+        assert_eq!(parse_gesture("2 up"), None);
+        assert_eq!(parse_gesture("4 sideways"), None);
+        assert_eq!(parse_gesture(""), None);
+        let b = block(&Keys::default(), "4 up");
+        assert!(b.contains("hl.gesture({ fingers = 4, direction = \"up\", action = function() hl.exec_cmd(\"nyx-switcher-send overview\") end })"));
+        let lua = format!(
+            "hl.gesture({{ fingers = 3, direction = \"up\", action = x }})\n\
+             -- hl.gesture({{ fingers = 4, direction = \"up\", action = y }})\n\
+             hl.gesture({{ fingers = 4, direction = \"vertical\", action = \"workspace\" }})\n{b}"
+        );
+        let found = gesture_conflicts(&lua, "4 up");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("vertical"));
+        assert_eq!(gesture_conflicts(&lua, "3 up").len(), 1);
+        assert!(gesture_conflicts(&lua, "4 left").is_empty());
+        assert_eq!(parse_gesture("4 pinchout"), Some((4, "pinchout")));
+        assert!(gesture_conflicts("hl.gesture({ fingers = 4, direction = \"pinchin\", action = \"float\" })", "4 pinchout").is_empty());
     }
 
     #[test]
