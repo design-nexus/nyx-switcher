@@ -82,3 +82,19 @@ window.nyx-switcher .sw-detail {
   font-size: 12px;
   color: @theme_dim_text;
 }
+
+/* ---------- Thumbnails ---------- */
+
+window.nyx-switcher .sw-thumb {
+  border-radius: 7px;
+  background: alpha(@theme_text, 0.05);
+}
+
+window.nyx-switcher .sw-thumb picture {
+  border-radius: 7px;
+}
+
+window.nyx-switcher .sw-thumb-icon {
+  margin: 0 0 -2px -2px;
+  -gtk-icon-shadow: 0 1px 4px alpha(black, 0.5);
+}

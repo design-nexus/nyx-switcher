@@ -16,7 +16,7 @@ It runs as a user service (`nyx-switcher.service`) and binds its keys in Hyprlan
 
 | Keys | What it does |
 |---|---|
-| Alt+Tab, Alt+Shift+Tab | Every window, most recently used first |
+| Alt+Tab, Alt+Shift+Tab | Every window as a thumbnail, most recently used first |
 | Super+Tab, Super+Shift+Tab | One entry per app; ↓ shows the selected app's windows, ↑ goes back |
 | Alt+\`, Alt+Shift+\` | The windows of the app you're in |
 | Super+Alt+W | All windows, without holding a key: Enter or a click switches |
@@ -41,6 +41,7 @@ the switcher opens.
 ```toml
 scope = "all"                 # "all", "monitor" (the focused one) or "workspace" (the one in front)
 show_agent_workspaces = false # also list windows on agent workspaces (named nyx-agent…)
+thumbnails = true             # window thumbnails (false: app icons)
 show_delay_ms = 80            # how long a key is held before the switcher appears
 animation = true
 
@@ -58,6 +59,10 @@ After changing `[keys]`, run `nyx-switcher --integrate`. It refuses a key anothe
 binding already uses (`nyx-switcher --check-keys` lists them) unless you add `--force`.
 
 Special workspaces (scratchpad, Quake console) aren't listed; minimized windows are.
+
+Thumbnails are taken when a window loses focus and refreshed when the switcher opens,
+so nothing is captured while you aren't switching. Windows on other workspaces show
+their last frame.
 
 ## Commands
 

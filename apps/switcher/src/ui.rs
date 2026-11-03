@@ -17,12 +17,19 @@ use nyx_switcher_core::config::{Config, Scope};
 use nyx_switcher_core::model::{self, Filter, Item, Mode};
 use nyx_switcher_core::session::Session;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const APP_TILE: i32 = 112;
 const WINDOW_TILE: i32 = 184;
+/// With thumbnails: the tile, and the thumbnail inside it (logical pixels).
+const THUMB_TILE: i32 = 256;
+const THUMB_W: i32 = 232;
+const THUMB_H: i32 = 146;
+/// A window is captured again on losing focus at most this often.
+const RECAPTURE: Duration = Duration::from_millis(800);
 
 pub struct Switcher {
     window: gtk::Window,
@@ -31,6 +38,12 @@ pub struct Switcher {
     caption: gtk::Label,
     detail: gtk::Label,
     tiles: RefCell<Vec<gtk::FlowBoxChild>>,
+    /// Thumbnails by stable id, kept while the window exists.
+    thumbs: RefCell<HashMap<String, gdk::Texture>>,
+    /// The thumbnail pictures on screen now, by stable id.
+    pictures: RefCell<HashMap<String, gtk::Picture>>,
+    captured: RefCell<HashMap<String, Instant>>,
+    last_active: RefCell<Option<String>>,
     desktop: RefCell<Arc<Desktop>>,
     index: RefCell<Index>,
     config: RefCell<Config>,
@@ -68,6 +81,14 @@ fn gdk_mods(mask: u32) -> gdk::ModifierType {
         m |= gdk::ModifierType::CONTROL_MASK;
     }
     m
+}
+
+/// A thumbnail as a GDK texture.
+fn shot_texture(shot: nyx_desktop::capture::Shot) -> gdk::Texture {
+    let format = if shot.opaque { gdk::MemoryFormat::B8g8r8x8 } else { gdk::MemoryFormat::B8g8r8a8Premultiplied };
+    let stride = shot.stride();
+    gdk::MemoryTexture::new(shot.width as i32, shot.height as i32, format, &glib::Bytes::from_owned(shot.data), stride)
+        .upcast()
 }
 
 fn monitor_named(name: &str) -> Option<gdk::Monitor> {
@@ -152,6 +173,10 @@ impl Switcher {
             caption,
             detail,
             tiles: RefCell::default(),
+            thumbs: RefCell::default(),
+            pictures: RefCell::default(),
+            captured: RefCell::default(),
+            last_active: RefCell::default(),
             desktop: RefCell::default(),
             index: RefCell::new(nyx_desktop::apps::from_gio()),
             config: RefCell::new(Config::load()),
@@ -175,6 +200,12 @@ impl Switcher {
         std::mem::forget(watch::watch_local(move |u| {
             if let Some(sw) = w.upgrade() {
                 *sw.desktop.borrow_mut() = u.desktop.clone();
+                if u.changes.focus {
+                    sw.focus_moved();
+                }
+                if u.changes.windows {
+                    sw.forget_closed();
+                }
                 if u.changes.windows || u.changes.titles {
                     sw.desktop_changed();
                 }
@@ -337,6 +368,7 @@ impl Switcher {
             }
         }
         self.window.present();
+        self.capture_listed();
         if let Some(p) = self.panel.borrow().as_ref() {
             p.announce();
         }
@@ -360,7 +392,13 @@ impl Switcher {
     /// Tiles per row: as many as fit in most of the monitor's width.
     fn columns(&self, monitor: Option<&gdk::Monitor>) -> u32 {
         let width = monitor.map(|m| m.geometry().width()).unwrap_or(1280);
-        let tile = if self.session.borrow().as_ref().is_some_and(|s| s.mode == Mode::Apps) { APP_TILE } else { WINDOW_TILE };
+        let tile = if self.session.borrow().as_ref().is_some_and(|s| s.mode == Mode::Apps) {
+            APP_TILE
+        } else if self.config.borrow().thumbnails {
+            THUMB_TILE
+        } else {
+            WINDOW_TILE
+        };
         let n = self.session.borrow().as_ref().map(|s| s.items.len()).unwrap_or(1) as i32;
         ((width as f64 * 0.8) as i32 / (tile + 8)).clamp(1, 12).min(n.max(1)) as u32
     }
@@ -573,6 +611,7 @@ impl Switcher {
     fn relayout(&self) {
         let monitor = self.window.monitor().and_downcast::<gdk::Monitor>();
         self.render();
+        self.capture_listed();
         self.set_columns(monitor.as_ref());
         self.card.set_css_classes(&self.card_classes());
     }
@@ -600,9 +639,14 @@ impl Switcher {
         while let Some(child) = self.grid.first_child() {
             self.grid.remove(&child);
         }
+        self.pictures.borrow_mut().clear();
         let mut tiles = Vec::with_capacity(s.items.len());
         for (i, item) in s.items.iter().enumerate() {
-            let tile = if s.mode == Mode::Apps { self.app_tile(item) } else { self.window_tile(item) };
+            let tile = match s.mode {
+                Mode::Apps => self.app_tile(item),
+                _ if self.config.borrow().thumbnails => self.thumb_tile(item),
+                _ => self.window_tile(item),
+            };
             let child = gtk::FlowBoxChild::new();
             child.set_child(Some(&tile));
             child.set_can_focus(false);
@@ -689,6 +733,131 @@ impl Switcher {
         badge.set_hexpand(true);
         b.append(&badge);
         b.upcast()
+    }
+
+    /// A window as its thumbnail (the app icon until one arrives), title and place.
+    fn thumb_tile(&self, item: &Item) -> gtk::Widget {
+        let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        b.set_size_request(THUMB_TILE - 16, -1);
+        let frame = gtk::Overlay::new();
+        frame.add_css_class("sw-thumb");
+        frame.set_size_request(THUMB_W, THUMB_H);
+        frame.set_overflow(gtk::Overflow::Hidden);
+        let icon = gtk::Image::from_gicon(&app_icon(item));
+        icon.set_pixel_size(56);
+        icon.add_css_class("sw-app-icon");
+        icon.set_halign(gtk::Align::Center);
+        icon.set_valign(gtk::Align::Center);
+        frame.set_child(Some(&icon));
+        let picture = gtk::Picture::new();
+        picture.set_content_fit(gtk::ContentFit::Contain);
+        picture.set_can_shrink(true);
+        let badge_icon = gtk::Image::from_gicon(&app_icon(item));
+        badge_icon.set_pixel_size(28);
+        badge_icon.add_css_class("sw-thumb-icon");
+        badge_icon.set_halign(gtk::Align::Start);
+        badge_icon.set_valign(gtk::Align::End);
+        frame.add_overlay(&picture);
+        frame.add_overlay(&badge_icon);
+        let cached = self.thumbs.borrow().get(&item.stable_id).cloned();
+        let has = cached.is_some();
+        picture.set_paintable(cached.as_ref());
+        icon.set_visible(!has);
+        badge_icon.set_visible(has);
+        // When a capture lands, the big icon steps aside for it.
+        let (i2, b2) = (icon.downgrade(), badge_icon.downgrade());
+        picture.connect_paintable_notify(move |p| {
+            let has = p.paintable().is_some();
+            if let (Some(i), Some(b)) = (i2.upgrade(), b2.upgrade()) {
+                i.set_visible(!has);
+                b.set_visible(has);
+            }
+        });
+        if !item.stable_id.is_empty() {
+            self.pictures.borrow_mut().insert(item.stable_id.clone(), picture);
+        }
+        b.append(&frame);
+        let title = gtk::Label::new(Some(if item.title.is_empty() { &item.class } else { &item.title }));
+        title.add_css_class("sw-title");
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_max_width_chars(1);
+        title.set_hexpand(true);
+        b.append(&title);
+        let desktop = self.desktop.borrow().clone();
+        let place = gtk::Label::new(Some(&place(item, &desktop)));
+        place.add_css_class("sw-badge");
+        place.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        place.set_max_width_chars(1);
+        place.set_hexpand(true);
+        b.append(&place);
+        b.upcast()
+    }
+
+    // ---------- Thumbnails ----------
+
+    /// Capture `ids` (stable ids) on a worker thread, sized for the monitor's scale.
+    fn capture(&self, ids: Vec<String>) {
+        if ids.is_empty() || !self.config.borrow().thumbnails {
+            return;
+        }
+        let scale = self.window.monitor().map(|m| m.scale_factor()).unwrap_or(2).max(1) as u32;
+        let now = Instant::now();
+        {
+            let mut captured = self.captured.borrow_mut();
+            for id in &ids {
+                captured.insert(id.clone(), now);
+            }
+        }
+        let w = self.weak();
+        let (n, started) = (ids.len(), Instant::now());
+        let done = Cell::new(0);
+        nyx_desktop::capture::capture(ids, THUMB_W as u32 * scale, THUMB_H as u32 * scale, move |shot| {
+            let Some(sw) = w.upgrade() else { return };
+            done.set(done.get() + 1);
+            sw.log(&format!("thumbnail {}/{n} after {:.1} ms", done.get(), started.elapsed().as_secs_f64() * 1000.0));
+            let id = shot.stable_id.clone();
+            let texture = shot_texture(shot);
+            if let Some(p) = sw.pictures.borrow().get(&id) {
+                p.set_paintable(Some(&texture));
+            }
+            sw.thumbs.borrow_mut().insert(id, texture);
+        });
+    }
+
+    /// Fresh thumbnails for the windows listed now (the first few dozen).
+    fn capture_listed(&self) {
+        let ids: Vec<String> = match self.session.borrow().as_ref() {
+            Some(s) if s.mode != Mode::Apps => {
+                s.items.iter().take(30).map(|i| i.stable_id.clone()).filter(|id| !id.is_empty()).collect()
+            }
+            _ => return,
+        };
+        self.capture(ids);
+    }
+
+    /// The window that just lost focus is captured as it was left, so the next switch
+    /// shows it at once. Nothing is captured while no focus moves.
+    fn focus_moved(&self) {
+        let desktop = self.desktop.borrow().clone();
+        let active = desktop.active_window.clone();
+        let previous = self.last_active.replace(active.clone());
+        if self.session.borrow().is_some() {
+            return;
+        }
+        let Some(prev) = previous.filter(|p| Some(p) != active.as_ref()) else { return };
+        let Some(id) = desktop.window(&prev).map(|w| w.stable_id.clone()).filter(|id| !id.is_empty()) else { return };
+        let recent = self.captured.borrow().get(&id).is_some_and(|t| t.elapsed() < RECAPTURE);
+        if !recent {
+            self.capture(vec![id]);
+        }
+    }
+
+    /// Drop thumbnails of windows that closed.
+    fn forget_closed(&self) {
+        let desktop = self.desktop.borrow().clone();
+        let alive: std::collections::HashSet<&str> = desktop.windows.iter().map(|w| w.stable_id.as_str()).collect();
+        self.thumbs.borrow_mut().retain(|id, _| alive.contains(id.as_str()));
+        self.captured.borrow_mut().retain(|id, _| alive.contains(id.as_str()));
     }
 
     /// Move the highlight and the caption to the selected entry.
