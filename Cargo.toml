@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["apps/switcher", "crates/nyx-switcher-core"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+authors = ["Ken Smith"]
+repository = "https://github.com/design-nexus/nyx-switcher"
+
+[profile.release]
+lto = "thin"
+strip = true
