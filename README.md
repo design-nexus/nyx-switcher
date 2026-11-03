@@ -19,12 +19,29 @@ It runs as a user service (`nyx-switcher.service`) and binds its keys in Hyprlan
 | Alt+Tab, Alt+Shift+Tab | Every window as a thumbnail, most recently used first |
 | Super+Tab, Super+Shift+Tab | One entry per app; ↓ shows the selected app's windows, ↑ goes back |
 | Alt+\`, Alt+Shift+\` | The windows of the app you're in |
-| Super+Alt+W | All windows, without holding a key: Enter or a click switches |
+| Super+Alt+W | The overview: every window, grouped by workspace |
 
 While the switcher is open: Tab and Shift+Tab or the arrow keys move, Home and End
 jump to either end, Enter switches, Esc closes without switching, and a click switches
-to that window. A quick tap goes straight back to the previous window without
-showing anything.
+to that window. Type to narrow the list by title or app name (Backspace widens it
+again), and Delete closes the selected window. A quick tap goes straight back to the
+previous window without showing anything.
+
+## Overview
+
+Super+Alt+W shows every window on every workspace and monitor, grouped by workspace,
+without holding a key. Type to search; the arrow keys or Tab move; Enter or a click
+goes to a window; Esc clears the search, then closes. Click a workspace's name to go
+to it. Each window has buttons, and keys, to act on it without going there:
+
+| Button | Key | |
+|---|---|---|
+| Float / Tile | Ctrl+T | switch between floating and tiled |
+| Move | Ctrl+1…9, Ctrl+M | to another workspace (silently), or to the next monitor |
+| Close | Ctrl+W | the app may still ask about unsaved work |
+
+Nyx Dock's right-click menu has Show windows, which opens the overview on that app's
+windows (`nyx-switcher-send overview <desktop id>`).
 
 Switching to a window on another workspace or monitor goes there; the window stays
 where it is in its layout. A minimized window comes back to the workspace you're on.
@@ -35,8 +52,8 @@ previous workspace.
 
 ## Settings
 
-`~/.config/nyx/switcher.toml`. Every key is optional, and changes apply the next time
-the switcher opens.
+Nyx Settings → Desktop → Switcher, or `~/.config/nyx/switcher.toml`. Every key is
+optional, and changes apply the next time the switcher opens.
 
 ```toml
 scope = "all"                 # "all", "monitor" (the focused one) or "workspace" (the one in front)
@@ -70,7 +87,7 @@ their last frame.
 nyx-switcher --check-keys       # other bindings on the switcher's keys
 nyx-switcher --integrate        # bind the keys from switcher.toml
 nyx-switcher --unintegrate      # give them back to Omarchy
-nyx-switcher-send next windows  # what the keys run: next|prev windows|apps|same-app, overview, hide
+nyx-switcher-send next windows  # what the keys run: next|prev windows|apps|same-app, overview [APP], hide
 ```
 
 If the service isn't running, `nyx-switcher-send next windows` falls back to

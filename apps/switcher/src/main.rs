@@ -8,6 +8,7 @@
 
 mod integration;
 mod ipc;
+mod overview;
 mod theme;
 mod ui;
 
@@ -22,7 +23,7 @@ pub const APP_ID: &str = "io.github.design_nexus.nyx.Switcher";
 
 const USAGE: &str = "Usage: nyx-switcher [--only <output>]
        nyx-switcher --next|--prev windows|apps|same-app
-       nyx-switcher --overview | --hide
+       nyx-switcher --overview [APP] | --hide
        nyx-switcher --integrate [--force] | --unintegrate | --check-keys
 
 With no option, start (hidden). --next/--prev open the running switcher or move its
@@ -44,7 +45,10 @@ fn main() -> ExitCode {
             }
             client(&format!("{} {mode}", &args[0][2..]), Some((args[0] == "--next", mode)))
         }
-        Some("--overview") => client("overview", None),
+        Some("--overview") => match args.get(1) {
+            Some(app) => client(&format!("overview {app}"), None),
+            None => client("overview", None),
+        },
         Some("--hide") => client("hide", None),
         Some("--integrate") => report(integration::apply(Some(&Config::load().keys), args.iter().any(|a| a == "--force"))),
         Some("--unintegrate") => report(integration::apply(None, true)),

@@ -32,7 +32,12 @@ const THUMB_H: i32 = 146;
 const RECAPTURE: Duration = Duration::from_millis(800);
 
 pub struct Switcher {
+    app: gtk::Application,
     window: gtk::Window,
+    /// What's typed while the switcher is open narrows it.
+    query: RefCell<String>,
+    query_label: gtk::Label,
+    overview: RefCell<Option<Rc<crate::overview::Overview>>>,
     card: gtk::Box,
     grid: gtk::FlowBox,
     caption: gtk::Label,
@@ -91,20 +96,20 @@ fn shot_texture(shot: nyx_desktop::capture::Shot) -> gdk::Texture {
         .upcast()
 }
 
-fn monitor_named(name: &str) -> Option<gdk::Monitor> {
+pub(crate) fn monitor_named(name: &str) -> Option<gdk::Monitor> {
     let display = gdk::Display::default()?;
     display.monitors().iter::<gdk::Monitor>().flatten().find(|m| m.connector().as_deref() == Some(name))
 }
 
-fn app_info(app: &str) -> Option<gio_unix::DesktopAppInfo> {
+pub(crate) fn app_info(app: &str) -> Option<gio_unix::DesktopAppInfo> {
     if app.starts_with("class:") { None } else { gio_unix::DesktopAppInfo::new(&format!("{app}.desktop")) }
 }
 
-fn app_name(item: &Item) -> String {
+pub(crate) fn app_name(item: &Item) -> String {
     app_info(&item.app).map(|i| i.display_name().to_string()).unwrap_or_else(|| item.class.clone())
 }
 
-fn app_icon(item: &Item) -> gio::Icon {
+pub(crate) fn app_icon(item: &Item) -> gio::Icon {
     if let Some(icon) = app_info(&item.app).and_then(|i| i.icon()) {
         return icon;
     }
@@ -118,7 +123,7 @@ fn app_icon(item: &Item) -> gio::Icon {
 }
 
 /// Where a window is, in words: `Workspace 3`, `Minimized`, `Workspace 12 · DP-1`.
-fn place(item: &Item, desktop: &Desktop) -> String {
+pub(crate) fn place(item: &Item, desktop: &Desktop) -> String {
     if item.minimized {
         return "Minimized".into();
     }
@@ -148,6 +153,10 @@ impl Switcher {
 
         let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
         card.add_css_class("sw-card");
+        let query_label = gtk::Label::new(None);
+        query_label.add_css_class("sw-query");
+        query_label.set_visible(false);
+        card.append(&query_label);
         let grid = gtk::FlowBox::new();
         grid.add_css_class("sw-grid");
         grid.set_selection_mode(gtk::SelectionMode::None);
@@ -167,7 +176,11 @@ impl Switcher {
         window.set_child(Some(&card));
 
         let sw = Rc::new(Switcher {
+            app: app.clone(),
             window,
+            query: RefCell::default(),
+            query_label,
+            overview: RefCell::default(),
             card,
             grid,
             caption,
@@ -209,6 +222,12 @@ impl Switcher {
                 if u.changes.windows || u.changes.titles {
                     sw.desktop_changed();
                 }
+                let open = sw.overview.borrow().as_ref().filter(|o| o.is_open()).cloned();
+                if let Some(o) = open
+                    && (u.changes.windows || u.changes.titles || u.changes.active || u.changes.workspaces)
+                {
+                    o.refresh();
+                }
             }
         }));
         let w = Rc::downgrade(&sw);
@@ -223,15 +242,18 @@ impl Switcher {
             let handlers = nyx_desktop::panel::Handlers {
                 show: Box::new(move || {
                     if let Some(sw) = w1.upgrade() {
-                        sw.request(Request { kind: Kind::Overview, sent_us: 0 });
+                        sw.request(Request { kind: Kind::Overview { app: None }, sent_us: 0 });
                     }
                 }),
                 hide: Box::new(move || {
                     if let Some(sw) = w2.upgrade() {
                         sw.cancel();
+                        sw.close_overview();
                     }
                 }),
-                is_open: Box::new(move || w3.upgrade().is_some_and(|sw| sw.session.borrow().is_some())),
+                is_open: Box::new(move || {
+                    w3.upgrade().is_some_and(|sw| sw.session.borrow().is_some() || sw.overview_open())
+                }),
             };
             match nyx_desktop::panel::Panel::serve(&conn, "switcher", handlers) {
                 Ok(p) => *sw.panel.borrow_mut() = Some(p),
@@ -258,12 +280,20 @@ impl Switcher {
             self.log(&format!("{:?} arrived {:.2} ms after the key", req.kind, (now_us().saturating_sub(req.sent_us)) as f64 / 1000.0));
         }
         match req.kind {
-            Kind::Hide => self.cancel(),
-            Kind::Overview => {
-                if self.session.borrow().is_some() {
-                    self.cancel();
+            Kind::Hide => {
+                self.cancel();
+                self.close_overview();
+            }
+            Kind::Overview { app } => {
+                self.cancel();
+                let overview = self.overview();
+                if overview.is_open() && app.is_none() {
+                    overview.close();
                 } else {
-                    self.open(Mode::Windows, true, true, req.sent_us);
+                    overview.open(app);
+                    if let Some(p) = self.panel.borrow().as_ref() {
+                        p.announce();
+                    }
                 }
             }
             Kind::Step { mode, forward } => {
@@ -281,6 +311,57 @@ impl Switcher {
         }
     }
 
+    // ---------- Shared with the overview ----------
+
+    pub(crate) fn weak_ref(&self) -> Weak<Switcher> {
+        self.weak()
+    }
+
+    pub(crate) fn application(&self) -> &gtk::Application {
+        &self.app
+    }
+
+    pub(crate) fn desktop(&self) -> Arc<Desktop> {
+        self.desktop.borrow().clone()
+    }
+
+    pub(crate) fn all_windows(&self, app: Option<String>) -> Vec<Item> {
+        let desktop = self.desktop();
+        model::items(&desktop, &self.index.borrow(), Mode::Windows, &self.filter(app, true))
+    }
+
+    pub(crate) fn keyboard(&self) -> bool {
+        self.keyboard
+    }
+
+    pub(crate) fn only(&self) -> Option<&str> {
+        self.only.as_deref()
+    }
+
+    pub(crate) fn debug_log(&self, what: &str) {
+        self.log(what);
+    }
+
+    fn overview(&self) -> Rc<crate::overview::Overview> {
+        if let Some(o) = self.overview.borrow().as_ref() {
+            return o.clone();
+        }
+        let o = crate::overview::Overview::build(self);
+        *self.overview.borrow_mut() = Some(o.clone());
+        o
+    }
+
+    fn overview_open(&self) -> bool {
+        self.overview.borrow().as_ref().is_some_and(|o| o.is_open())
+    }
+
+    fn close_overview(&self) {
+        let o = self.overview.borrow().clone();
+        if let Some(o) = o {
+            o.close();
+        }
+    }
+
     fn filter(&self, app: Option<String>, sticky_all: bool) -> Filter {
         let c = self.config.borrow();
         Filter {
@@ -292,11 +373,19 @@ impl Switcher {
 
     fn items(&self, mode: Mode, app: Option<String>) -> Vec<Item> {
         let desktop = self.desktop.borrow().clone();
-        model::items(&desktop, &self.index.borrow(), mode, &self.filter(app, false))
+        let mut items = model::items(&desktop, &self.index.borrow(), mode, &self.filter(app, false));
+        let query = self.query.borrow();
+        if !query.is_empty() {
+            items.retain(|i| nyx_switcher_core::overview::matches(i, &app_name(i), &query));
+        }
+        items
     }
 
     fn open(&self, mode: Mode, forward: bool, sticky: bool, sent_us: u128) {
         *self.config.borrow_mut() = Config::load();
+        self.close_overview();
+        self.query.borrow_mut().clear();
+        self.query_label.set_visible(false);
         let desktop = self.desktop.borrow().clone();
         let items = if sticky {
             model::items(&desktop, &self.index.borrow(), mode, &self.filter(None, true))
@@ -556,9 +645,49 @@ impl Switcher {
             gdk::Key::Up | gdk::Key::KP_Up => self.move_row(-cols),
             gdk::Key::Home => self.select(0),
             gdk::Key::End => self.select(usize::MAX),
-            _ => return glib::Propagation::Proceed,
+            gdk::Key::Delete | gdk::Key::KP_Delete => self.close_selected(),
+            gdk::Key::BackSpace => {
+                if self.query.borrow_mut().pop().is_none() {
+                    return glib::Propagation::Stop;
+                }
+                self.search_changed();
+            }
+            _ => match key.to_unicode().filter(|c| !c.is_control()) {
+                Some(c) if !state.contains(gdk::ModifierType::CONTROL_MASK) => {
+                    self.query.borrow_mut().push(c);
+                    self.search_changed();
+                }
+                _ => return glib::Propagation::Proceed,
+            },
         }
         glib::Propagation::Stop
+    }
+
+    /// Narrow the entries to what's typed.
+    fn search_changed(&self) {
+        let query = self.query.borrow().clone();
+        self.query_label.set_text(&format!("“{query}”"));
+        self.query_label.set_visible(!query.is_empty());
+        let (mode, app) = match self.session.borrow().as_ref() {
+            Some(s) => (s.mode, s.expanded.clone()),
+            None => return,
+        };
+        let items = self.items(mode, app);
+        if let Some(s) = self.session.borrow_mut().as_mut() {
+            if !s.refresh(items) {
+                s.items.clear();
+            }
+            s.selected = 0;
+        }
+        self.relayout();
+    }
+
+    /// Close the selected window; the switcher stays open on the rest.
+    fn close_selected(&self) {
+        let address = self.session.borrow().as_ref().and_then(|s| s.selected().map(|i| i.address.clone()));
+        if let Some(a) = address {
+            std::thread::spawn(move || nyx_desktop::actions::close(&a));
+        }
     }
 
     fn selected_index(&self) -> usize {
@@ -626,6 +755,12 @@ impl Switcher {
         let alive = self.session.borrow_mut().as_mut().is_some_and(|s| s.refresh(items));
         if alive {
             self.render();
+        } else if !self.query.borrow().is_empty() {
+            // Nothing matches what's typed: stay open, empty.
+            if let Some(s) = self.session.borrow_mut().as_mut() {
+                s.items.clear();
+            }
+            self.render();
         } else {
             self.cancel();
         }
@@ -644,7 +779,7 @@ impl Switcher {
         for (i, item) in s.items.iter().enumerate() {
             let tile = match s.mode {
                 Mode::Apps => self.app_tile(item),
-                _ if self.config.borrow().thumbnails => self.thumb_tile(item),
+                _ if self.config.borrow().thumbnails => self.thumb_tile(item).0.upcast(),
                 _ => self.window_tile(item),
             };
             let child = gtk::FlowBoxChild::new();
@@ -736,7 +871,7 @@ impl Switcher {
     }
 
     /// A window as its thumbnail (the app icon until one arrives), title and place.
-    fn thumb_tile(&self, item: &Item) -> gtk::Widget {
+    pub(crate) fn thumb_tile(&self, item: &Item) -> (gtk::Box, gtk::Overlay) {
         let b = gtk::Box::new(gtk::Orientation::Vertical, 6);
         b.set_size_request(THUMB_TILE - 16, -1);
         let frame = gtk::Overlay::new();
@@ -790,13 +925,13 @@ impl Switcher {
         place.set_max_width_chars(1);
         place.set_hexpand(true);
         b.append(&place);
-        b.upcast()
+        (b, frame)
     }
 
     // ---------- Thumbnails ----------
 
     /// Capture `ids` (stable ids) on a worker thread, sized for the monitor's scale.
-    fn capture(&self, ids: Vec<String>) {
+    pub(crate) fn capture(&self, ids: Vec<String>) {
         if ids.is_empty() || !self.config.borrow().thumbnails {
             return;
         }
@@ -871,7 +1006,11 @@ impl Switcher {
                 t.remove_css_class("selected");
             }
         }
-        let Some(item) = s.selected() else { return };
+        let Some(item) = s.selected() else {
+            self.caption.set_text("No matching windows");
+            self.detail.set_text("Backspace to widen the search");
+            return;
+        };
         let desktop = self.desktop.borrow().clone();
         if s.mode == Mode::Apps {
             self.caption.set_text(&app_name(item));

@@ -9,14 +9,15 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
     Step { mode: Mode, forward: bool },
-    Overview,
+    /// All windows, or one app's (its desktop id or `class:<class>`).
+    Overview { app: Option<String> },
     Hide,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     pub kind: Kind,
     /// When the client sent it (µs since the epoch), for latency logs.
@@ -24,14 +25,22 @@ pub struct Request {
 }
 
 pub fn parse(line: &str) -> Option<Request> {
-    let mut words = line.split_whitespace();
-    let kind = match words.next()? {
-        w @ ("next" | "prev") => Kind::Step { mode: Mode::parse(words.next()?)?, forward: w == "next" },
-        "overview" => Kind::Overview,
-        "hide" => Kind::Hide,
+    let mut words: Vec<&str> = line.split_whitespace().collect();
+    // The client's timestamp comes last.
+    let sent_us = match words.last().and_then(|w| w.parse::<u128>().ok()) {
+        Some(t) if words.len() > 1 => {
+            words.pop();
+            t
+        }
+        _ => 0,
+    };
+    let kind = match words[..] {
+        [w @ ("next" | "prev"), m] => Kind::Step { mode: Mode::parse(m)?, forward: w == "next" },
+        ["overview"] => Kind::Overview { app: None },
+        ["overview", app] => Kind::Overview { app: Some(app.to_string()) },
+        ["hide"] => Kind::Hide,
         _ => return None,
     };
-    let sent_us = words.next().and_then(|w| w.parse().ok()).unwrap_or(0);
     Some(Request { kind, sent_us })
 }
 
@@ -92,7 +101,9 @@ mod tests {
     fn parses_requests() {
         assert_eq!(parse("next windows 12").unwrap(), Request { kind: Kind::Step { mode: Mode::Windows, forward: true }, sent_us: 12 });
         assert_eq!(parse("prev same-app").unwrap().kind, Kind::Step { mode: Mode::SameApp, forward: false });
-        assert_eq!(parse("overview 5").unwrap().kind, Kind::Overview);
+        assert_eq!(parse("overview 5").unwrap().kind, Kind::Overview { app: None });
+        assert_eq!(parse("overview org.mozilla.firefox 5").unwrap(), Request { kind: Kind::Overview { app: Some("org.mozilla.firefox".into()) }, sent_us: 5 });
+        assert!(parse("next windows extra 5").is_none());
         assert!(parse("next galaxy").is_none());
         assert!(parse("").is_none());
     }

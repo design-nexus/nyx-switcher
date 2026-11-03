@@ -98,3 +98,148 @@ window.nyx-switcher .sw-thumb-icon {
   margin: 0 0 -2px -2px;
   -gtk-icon-shadow: 0 1px 4px alpha(black, 0.5);
 }
+
+/* ---------- Search (typed while the switcher is open) ---------- */
+
+window.nyx-switcher .sw-query {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: @theme_accent;
+}
+
+/* ---------- Overview ---------- */
+
+window.nyx-overview {
+  background: @theme_bg;
+  color: @theme_text;
+}
+
+window.nyx-overview .ov-head {
+  margin: 28px 0 18px;
+}
+
+window.nyx-overview entry.ov-search,
+window.nyx-overview .ov-search {
+  min-height: 36px;
+  border-radius: 11px;
+  background: @theme_popover;
+  border: 1px solid @theme_border;
+  box-shadow: none;
+}
+
+window.nyx-overview .ov-search:focus-within {
+  border-color: alpha(@theme_accent, 0.6);
+}
+
+window.nyx-overview scrolledwindow,
+window.nyx-overview viewport {
+  background: none;
+}
+
+window.nyx-overview .ov-body {
+  padding: 0 48px 48px;
+}
+
+window.nyx-overview flowbox.ov-body > flowboxchild {
+  padding: 0;
+  background: none;
+}
+
+window.nyx-overview .ov-section {
+  padding: 12px 8px 8px;
+  border-radius: 15px;
+  background: @theme_card;
+}
+
+window.nyx-overview .ov-section-head {
+  padding: 0 10px 2px;
+}
+
+window.nyx-overview .ov-section-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+window.nyx-overview .ov-section-meta {
+  font-size: 12px;
+  color: @theme_dim_text;
+}
+
+window.nyx-overview .ov-empty {
+  font-size: 14px;
+  color: @theme_dim_text;
+}
+
+window.nyx-overview flowbox.ov-grid {
+  background: none;
+}
+
+window.nyx-overview flowboxchild.sw-tile {
+  padding: 8px;
+  margin: 2px;
+  border-radius: 11px;
+  outline: none;
+  background: none;
+  transition: background 90ms ease-out, box-shadow 90ms ease-out;
+}
+
+window.nyx-overview flowboxchild.sw-tile:hover {
+  background: @row_hover;
+}
+
+window.nyx-overview flowboxchild.sw-tile.selected {
+  background: @nav_active;
+  box-shadow: inset 0 0 0 2px alpha(@theme_accent, 0.85), 0 0 14px alpha(@theme_accent, 0.18);
+}
+
+window.nyx-overview .sw-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+window.nyx-overview .sw-badge {
+  font-size: 11.5px;
+  color: @theme_dim_text;
+}
+
+window.nyx-overview .sw-thumb {
+  border-radius: 7px;
+  background: alpha(@theme_text, 0.05);
+}
+
+window.nyx-overview .sw-thumb-icon {
+  margin: 0 0 -2px -2px;
+}
+
+/* Window actions: shown on the hovered or selected window. */
+window.nyx-overview .ov-actions {
+  margin: 6px;
+  padding: 2px;
+  border-radius: 9px;
+  background: alpha(@theme_popover, 0.94);
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+
+window.nyx-overview flowboxchild.sw-tile:hover .ov-actions,
+window.nyx-overview flowboxchild.sw-tile.selected .ov-actions {
+  opacity: 1;
+}
+
+window.nyx-overview button.ov-icon-button,
+window.nyx-overview .ov-icon-button > button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 7px;
+  background: none;
+  box-shadow: none;
+  color: @theme_dim_text;
+}
+
+window.nyx-overview button.ov-icon-button:hover,
+window.nyx-overview .ov-icon-button > button:hover {
+  background: @row_hover;
+  color: @theme_text;
+}

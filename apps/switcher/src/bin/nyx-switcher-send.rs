@@ -1,5 +1,5 @@
-//! What the shortcuts run: `nyx-switcher-send next windows`, `prev apps`, `overview`,
-//! `hide`. It only writes the request to the running switcher's socket, without
+//! What the shortcuts run: `nyx-switcher-send next windows`, `prev apps`, `overview`
+//! (optionally one app's windows: `overview <desktop id>`), `hide`. It only writes the request to the running switcher's socket, without
 //! loading GTK, so a press costs well under a millisecond. Without a running switcher,
 //! a window step falls back to Hyprland's own cycling, so Alt+Tab never goes dead.
 
@@ -22,9 +22,10 @@ fn main() -> ExitCode {
     let request = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [w @ ("next" | "prev"), m @ ("windows" | "apps" | "same-app")] => format!("{w} {m}"),
         ["overview"] => "overview".into(),
+        ["overview", app] if !app.is_empty() && !app.contains(char::is_whitespace) => format!("overview {app}"),
         ["hide"] => "hide".into(),
         _ => {
-            eprintln!("Usage: nyx-switcher-send next|prev windows|apps|same-app | overview | hide");
+            eprintln!("Usage: nyx-switcher-send next|prev windows|apps|same-app | overview [APP] | hide");
             return ExitCode::FAILURE;
         }
     };
