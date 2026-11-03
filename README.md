@@ -39,6 +39,7 @@ to it. Each window has buttons, and keys, to act on it without going there:
 
 | Button | Key | |
 |---|---|---|
+| Hide the extra titlebar | | for a floating window whose app draws its own titlebar: Omarchy's floating titlebar is left off for that app (Nyx Settings keeps the list) |
 | Take out of the group | Ctrl+G | for a tab of a group; it tiles beside the group |
 | Float / Tile | Ctrl+T | switch between floating and tiled |
 | Move | Ctrl+1…9, Ctrl+M | to another workspace (silently), or to the next monitor |

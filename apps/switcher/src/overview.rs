@@ -358,7 +358,20 @@ impl Overview {
         ungroup.set_visible(item.group.len() > 1);
         let addr = item.address.clone();
         ungroup.connect_clicked(move |_| run(actions::leave_group(&addr)));
-        for b in [ungroup.upcast_ref::<gtk::Widget>(), float.upcast_ref(), mv.upcast_ref(), close.upcast_ref()] {
+        // On a floating workspace Omarchy adds a titlebar; an app with its own then has
+        // two. Settings keeps a list of such apps.
+        let own_bar = gtk::Button::from_icon_name("focus-top-bar-symbolic");
+        own_bar.set_tooltip_text(Some("It has its own titlebar: hide the extra one for this app"));
+        own_bar.set_visible(item.floating);
+        let app = item.app.clone();
+        own_bar.connect_clicked(move |b| {
+            b.set_sensitive(false);
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("nyx-settings").args(["--own-titlebar", &app]).output();
+            });
+        });
+        for b in [own_bar.upcast_ref::<gtk::Widget>(), ungroup.upcast_ref(), float.upcast_ref(), mv.upcast_ref(), close.upcast_ref()] {
             b.add_css_class("ov-icon-button");
             bar.append(b);
         }
