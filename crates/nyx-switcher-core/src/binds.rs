@@ -154,16 +154,26 @@ pub fn gesture_conflicts(lua: &str, gesture: &str) -> Vec<String> {
     out
 }
 
-/// The block for `keys` and `gesture`. Keys that aren't valid are left out.
+/// The block for `keys` and `gesture`, with Omarchy's `o.bind`. Keys that aren't valid
+/// are left out.
 pub fn block(keys: &Keys, gesture: &str) -> String {
+    block_with(keys, gesture, true)
+}
+
+/// The block for a configuration without Omarchy's helpers: Hyprland's own `hl.bind`.
+pub fn plain_block(keys: &Keys, gesture: &str) -> String {
+    block_with(keys, gesture, false)
+}
+
+fn block_with(keys: &Keys, gesture: &str, omarchy: bool) -> String {
     let mut out = format!("{START}\n-- Owned by Switcher. Change the keys in Settings → Desktop → Switcher.\n");
     for b in binds(keys).into_iter().filter(|b| valid_key(&b.key)) {
-        out.push_str(&format!(
-            "hl.unbind({k})\no.bind({k}, {d}, {c})\n",
-            k = lua_string(&b.key),
-            d = lua_string(b.description),
-            c = lua_string(b.command)
-        ));
+        let (k, d, c) = (lua_string(&b.key), lua_string(b.description), lua_string(b.command));
+        if omarchy {
+            out.push_str(&format!("hl.unbind({k})\no.bind({k}, {d}, {c})\n"));
+        } else {
+            out.push_str(&format!("hl.unbind({k})\nhl.bind({k}, hl.dsp.exec_cmd({c}), {{ description = {d} }})\n"));
+        }
     }
     if let Some((fingers, dir)) = parse_gesture(gesture) {
         out.push_str(&format!(
@@ -311,6 +321,15 @@ mod tests {
         assert!(gesture_conflicts(&lua, "4 left").is_empty());
         assert_eq!(parse_gesture("4 pinchout"), Some((4, "pinchout")));
         assert!(gesture_conflicts("hl.gesture({ fingers = 4, direction = \"pinchin\", action = \"float\" })", "4 pinchout").is_empty());
+    }
+
+    #[test]
+    fn plain_block_uses_hyprland_binds() {
+        let b = plain_block(&Keys::default(), "");
+        assert!(b.contains(
+            "hl.bind(\"ALT + TAB\", hl.dsp.exec_cmd(\"nyx-switcher-send next windows\"), { description = \"Switch windows\" })"
+        ));
+        assert!(!b.contains("o.bind"));
     }
 
     #[test]

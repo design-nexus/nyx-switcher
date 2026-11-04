@@ -97,6 +97,11 @@ pub fn apply(config: Option<&Config>, force: bool) -> Result<String, String> {
         }
     }
     let file = hypr_file();
+    // A hyprland.lua another tool manages (a link, as Home Manager makes on NyxOS) isn't
+    // edited: the shortcuts go in their own file, which that configuration loads.
+    if file.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+        return own_file(config);
+    }
     let original = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
     let owned = owned_file();
     let old = std::fs::read_to_string(&owned).ok();
@@ -119,7 +124,34 @@ pub fn apply(config: Option<&Config>, force: bool) -> Result<String, String> {
             let _ = std::fs::remove_file(owned);
         }
     }
-    Ok(match config {
+    Ok(summary(config))
+}
+
+/// `~/.config/hypr/nyx-switcher.lua`, for a hyprland.lua that loads it.
+fn own_file(config: Option<&Config>) -> Result<String, String> {
+    let file = config_home().join("hypr/nyx-switcher.lua");
+    let original = std::fs::read_to_string(&file).ok();
+    match config {
+        Some(c) => write_atomic(&file, &binds::plain_block(&c.keys, &c.gesture))?,
+        None => {
+            let _ = std::fs::remove_file(&file);
+        }
+    }
+    if let Err(e) = reload_ok() {
+        match &original {
+            Some(text) => write_atomic(&file, text)?,
+            None => {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+        let _ = reload_ok();
+        return Err(format!("{e} (the change was undone)"));
+    }
+    Ok(summary(config))
+}
+
+fn summary(config: Option<&Config>) -> String {
+    match config {
         Some(c) => {
             let mut lines: Vec<String> = binds::binds(&c.keys).iter().map(|b| format!("{}: {}", b.key, b.description)).collect();
             if let Some((f, d)) = binds::parse_gesture(&c.gesture) {
@@ -128,5 +160,5 @@ pub fn apply(config: Option<&Config>, force: bool) -> Result<String, String> {
             lines.join("\n")
         }
         None => "The shortcuts are Omarchy's again.".into(),
-    })
+    }
 }
