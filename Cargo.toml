@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/switcher", "crates/nyx-switcher-core"]
+members = ["apps/switcher", "apps/switcher-backend", "crates/nyx-switcher-core"]
 
 [workspace.package]
 edition = "2024"

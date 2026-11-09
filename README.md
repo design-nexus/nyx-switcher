@@ -113,8 +113,20 @@ Hyprland's own window cycling, so Alt+Tab keeps working.
 
 ```sh
 cargo test --locked --workspace
-cargo build --release --locked -p nyx-switcher
+cargo build --release --locked -p nyx-switcher -p nyx-switcher-backend
 ```
+
+The switcher is drawn in Quickshell by default: `nyx-switcher-backend` keeps the
+shortcuts' socket and the switching session, and `qml/Switcher` draws the card and the
+overview in the shared Nyx runtime (`nyx-shell-qs`; `qml/runtime` is a copy of it, from
+nyx-shell's `tools/vendor-runtime.sh`). `nyx-switcher --ui gtk` goes back to the GTK
+switcher, `--ui qml` returns, `--ui` alone says which is on. To try it on a test output,
+run `NYX_SWITCHER_SOCKET=/tmp/sw.sock NYX_SWITCHER_UI_SOCKET=/tmp/sw-ui.sock
+NYX_SWITCHER_ONLY=HEADLESS-1 nyx-switcher-backend` and load `qml/Switcher` in `qs` with
+the same `NYX_SWITCHER_UI_SOCKET`, `NYX_SHELL_SCREEN=HEADLESS-1` and
+`NYX_SHELL_NO_KEYBOARD=1`, then send `next windows` or `overview` to the socket.
+`NYX_SWITCHER_DEBUG=1` logs how long after the key the request arrived and the card
+showed.
 
 ## License
 

@@ -6,7 +6,14 @@
 # It runs as a user service and takes Alt+Tab, Super+Tab, Alt+` and Super+Alt+W in
 # Hyprland (keys in ~/.config/nyx/switcher.toml). NYX_SKIP_INTEGRATION=1 leaves the
 # keys alone; ./uninstall.sh gives them back to Omarchy.
+#
+# The switcher is drawn in Quickshell by default (the shared runtime, nyx-shell-qs, with
+# nyx-switcher-backend keeping the shortcuts' socket); the GTK switcher is still there:
+# `nyx-switcher --ui gtk|qml` switches.
+#   NYX_UI=gtk|qml ./install.sh     choose the interface on a first install
 set -euo pipefail
+
+DEFAULT_UI=qml
 
 REPO="design-nexus/nyx-switcher"
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -43,7 +50,7 @@ if ! command -v cargo >/dev/null; then
   sudo pacman -S --needed --noconfirm rust
 fi
 say "Building Nyx Switcher (a few minutes the first time)"
-(cd "$src" && cargo build --release --locked -p nyx-switcher)
+(cd "$src" && cargo build --release --locked -p nyx-switcher -p nyx-switcher-backend)
 
 bin="$HOME/.local/bin"
 units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -51,13 +58,31 @@ mkdir -p "$bin" "$units"
 target="${CARGO_TARGET_DIR:-$src/target}/release"
 # Replace the files rather than writing into them, so a running switcher keeps its old
 # binary until it restarts.
-for b in nyx-switcher nyx-switcher-send; do
+for b in nyx-switcher nyx-switcher-send nyx-switcher-backend; do
   install -m 755 "$target/$b" "$bin/$b.new" && mv -f "$bin/$b.new" "$bin/$b"
 done
 install -m 644 "$src/apps/switcher/data/nyx-switcher.service" "$units/nyx-switcher.service"
+install -m 644 "$src/apps/switcher-backend/data/nyx-switcher-backend.service" "$units/nyx-switcher-backend.service"
+# The Quickshell interface, and the shared runtime it runs in (kept if a newer one is in place).
+share="${XDG_DATA_HOME:-$HOME/.local/share}"
+mkdir -p "$share/nyx-switcher"
+rm -rf "$share/nyx-switcher/qml.new"
+cp -r "$src/qml/Switcher" "$share/nyx-switcher/qml.new"
+rm -rf "$share/nyx-switcher/qml" && mv "$share/nyx-switcher/qml.new" "$share/nyx-switcher/qml"
+bash "$src/qml/runtime/install-runtime.sh" "$src/qml/runtime"
 systemctl --user daemon-reload 2>/dev/null || true
-systemctl --user enable nyx-switcher.service 2>/dev/null || true
-systemctl --user restart nyx-switcher.service 2>/dev/null || true
+# The interface: chosen once (NYX_UI, else the default), then whatever --ui last chose.
+chosen="$share/nyx-switcher/ui"
+if [[ ! -f $chosen ]]; then
+  "$bin/nyx-switcher" --ui "${NYX_UI:-$DEFAULT_UI}" >/dev/null && echo "${NYX_UI:-$DEFAULT_UI}" > "$chosen"
+fi
+if [[ $("$bin/nyx-switcher" --ui) == qml ]]; then
+  systemctl --user restart nyx-switcher-backend.service 2>/dev/null || true
+  systemctl --user restart nyx-shell-qs.service 2>/dev/null || true
+else
+  systemctl --user enable nyx-switcher.service 2>/dev/null || true
+  systemctl --user restart nyx-switcher.service 2>/dev/null || true
+fi
 
 if [[ ${NYX_SKIP_INTEGRATION:-} != 1 ]] && command -v hyprctl >/dev/null; then
   "$bin/nyx-switcher" --integrate || warn "The shortcuts weren't set. See: nyx-switcher --check-keys"

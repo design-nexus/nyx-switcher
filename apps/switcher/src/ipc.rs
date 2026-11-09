@@ -2,7 +2,6 @@
 //! `NYX_SWITCHER_SOCKET`). One line per request: `next windows <sent µs>`,
 //! `prev apps …`, `overview …`, `hide …`.
 
-use gtk::glib;
 use nyx_switcher_core::model::Mode;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};

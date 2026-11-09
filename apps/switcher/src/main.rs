@@ -21,17 +21,25 @@ use std::rc::Rc;
 
 pub const APP_ID: &str = "io.github.design_nexus.nyx.Switcher";
 
+const COMPONENT: nyx_ui_link::switch::Component = nyx_ui_link::switch::Component {
+    app: "nyx-switcher",
+    gtk_unit: "nyx-switcher.service",
+    backend_units: &["nyx-switcher-backend.service"],
+};
+
 const USAGE: &str = "Usage: nyx-switcher [--only <output>]
        nyx-switcher --next|--prev windows|apps|same-app
        nyx-switcher --overview [APP] | --hide
        nyx-switcher --integrate [--force] | --unintegrate | --check-keys
+       nyx-switcher --ui [qml|gtk]
 
 With no option, start (hidden). --next/--prev open the running switcher or move its
 selection; releasing the shortcut's modifier switches. --overview opens it without
 holding a key (Enter or a click switches, Esc closes). --integrate binds the keys
 from ~/.config/nyx/switcher.toml in Hyprland (Alt+Tab, Super+Tab, Alt+` and
 Super+Alt+W by default); --unintegrate gives them back to Omarchy; --check-keys lists
-other bindings on them.
+other bindings on them. --ui uses the Quickshell (qml) or the GTK switcher; alone, it
+says which is on.
 ";
 
 fn main() -> ExitCode {
@@ -50,6 +58,14 @@ fn main() -> ExitCode {
             None => client("overview", None),
         },
         Some("--hide") => client("hide", None),
+        Some("--ui") => match args.get(1).and_then(|a| nyx_ui_link::switch::Ui::parse(a)) {
+            Some(ui) => report(nyx_ui_link::switch::set(&COMPONENT, ui)),
+            None => {
+                let qml = nyx_ui_link::switch::current(&COMPONENT) == nyx_ui_link::switch::Ui::Qml;
+                println!("{}", if qml { "qml" } else { "gtk" });
+                ExitCode::SUCCESS
+            }
+        },
         Some("--integrate") => report(integration::apply(Some(&Config::load()), args.iter().any(|a| a == "--force"))),
         Some("--unintegrate") => report(integration::apply(None, true)),
         Some("--check-keys") => match integration::check(&Config::load()) {
@@ -112,6 +128,10 @@ fn client(request: &str, step: Option<(bool, &str)>) -> ExitCode {
 fn service() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let only = args.iter().position(|a| a == "--only").and_then(|i| args.get(i + 1)).cloned();
+    if only.is_none() && nyx_ui_link::switch::current(&COMPONENT) == nyx_ui_link::switch::Ui::Qml {
+        eprintln!("nyx-switcher: the Quickshell switcher is on (nyx-switcher-backend); switch back with: nyx-switcher --ui gtk");
+        return ExitCode::SUCCESS;
+    }
     // A test copy (`--only <output>`) is separate: its own id and socket.
     let (id, flags) = if only.is_some() {
         if std::env::var_os("NYX_SWITCHER_SOCKET").is_none() {
