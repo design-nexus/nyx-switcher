@@ -1,5 +1,8 @@
-//! `~/.config/nyx/switcher.toml`. Every key is optional; a missing or broken file means
-//! the defaults (a broken one is reported, never overwritten).
+//! The `switcher` domain of NyxOS's configuration layers: NyxOS's defaults
+//! (`/etc/nyxos/defaults/switcher.toml`), an administrator's, then the user's
+//! `~/.config/nyx/switcher.toml` (Settings writes it). Every key is optional; a missing
+//! layer adds nothing, a key of the wrong type is left at its default, and a user file
+//! that isn't TOML is kept aside as `switcher.toml.broken-<time>` and reported.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -128,16 +131,19 @@ impl Config {
         Ok(c)
     }
 
-    /// The settings on disk, or the defaults (a broken file is reported on stderr).
+    /// The settings through every layer (problems are reported on stderr).
     pub fn load() -> Config {
-        let path = Config::path();
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Config::parse(&text).unwrap_or_else(|e| {
-                eprintln!("nyx-switcher: {}: {e}; using the defaults", path.display());
-                Config::default()
-            }),
-            Err(_) => Config::default(),
+        Config::load_from(&store())
+    }
+
+    pub fn load_from(store: &nyx_config::Store) -> Config {
+        let loaded = store.load();
+        let (mut c, problems) = nyx_config::parse::<Config>(&loaded);
+        for p in problems.iter().chain(loaded.problems.iter().map(|p| &p.message)) {
+            eprintln!("nyx-switcher: {p}");
         }
+        c.show_delay_ms = c.show_delay_ms.min(1000);
+        c
     }
 
     pub fn to_toml(&self) -> String {
@@ -145,9 +151,31 @@ impl Config {
     }
 }
 
+/// The switcher's domain. It never writes its file, so there's nothing to migrate.
+pub const DOMAIN: nyx_config::Domain = nyx_config::Domain { name: "switcher", version: 0, migrations: &[] };
+
+pub fn store() -> nyx_config::Store {
+    nyx_config::Store::new(DOMAIN, nyx_config::table_of(&Config::default()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nyxos_defaults_come_under_the_users_file() {
+        let d = tempfile::tempdir().unwrap();
+        let layers = nyx_config::Layers { defaults: d.path().join("d"), system: d.path().join("s"), user: d.path().join("u") };
+        std::fs::create_dir_all(&layers.defaults).unwrap();
+        std::fs::create_dir_all(&layers.user).unwrap();
+        std::fs::write(layers.defaults.join("switcher.toml"), "scope = \"monitor\"\nshow_delay_ms = 5000\n").unwrap();
+        let store = nyx_config::Store::with_layers(layers.clone(), DOMAIN, nyx_config::table_of(&Config::default()));
+        let c = Config::load_from(&store);
+        assert_eq!(c.scope, Scope::Monitor);
+        assert_eq!(c.show_delay_ms, 1000, "clamped as before");
+        std::fs::write(layers.user.join("switcher.toml"), "scope = \"workspace\"\n").unwrap();
+        assert_eq!(Config::load_from(&store).scope, Scope::Workspace);
+    }
 
     #[test]
     fn empty_file_is_the_defaults() {
