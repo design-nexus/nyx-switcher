@@ -21,6 +21,7 @@ fn monitor(id: i64, name: &str, focused: bool, active: i64) -> Monitor {
         active_workspace: active,
         special_workspace: None,
         reserved: [0; 4],
+        refresh_rate: 60.0,
     }
 }
 
@@ -80,5 +81,6 @@ pub fn desktop() -> Desktop {
         windows,
         active_window: Some("a1".into()),
         connected: true,
+        ..Desktop::default()
     }
 }
