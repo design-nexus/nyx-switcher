@@ -1,9 +1,11 @@
 # Switcher
 
-Window and app switching for [Omarchy](https://omarchy.org) and Hyprland. Hold a key, tap
-Tab to choose, let go to switch. It follows your Omarchy theme.
+Window and app switching for NyxOS and [Omarchy](https://omarchy.org). Hold a key, tap
+Tab to choose, let go to switch. It follows the desktop theme.
 
 ## Install
+
+On NyxOS, the switcher comes with the system. On Omarchy:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/design-nexus/nyx-switcher/main/install.sh | bash
